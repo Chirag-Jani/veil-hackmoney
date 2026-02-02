@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Veil",
+  "version": "0.1.0",
+  "description": "Non-custodial privacy layer for Solana payments.",
+  "icons": {
+    "16": "veil_shield.png",
+    "48": "veil_shield.png",
+    "128": "veil_shield.png"
+  },
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://api.mainnet-beta.solana.com/*",
+    "https://*.alchemy.com/*",
+    "https://*.helius-rpc.com/*",
+    "https://*.solana.com/*",
+    "https://*.privacycash.org/*",
+    "https://api3.privacycash.org/*",
+    "https://api.coingecko.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "veil_shield.png",
+      "48": "veil_shield.png",
+      "128": "veil_shield.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["provider-inject.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
