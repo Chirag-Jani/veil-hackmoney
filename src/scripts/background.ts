@@ -1,5 +1,7 @@
 import "../polyfills";
+import { Wallet } from "ethers";
 import { getBalanceMonitor } from "../utils/balanceMonitor";
+import { getEthereumWalletForIndex } from "../utils/keyManager";
 import { onMessageType } from "../utils/messaging";
 import {
   checkWalletUnlocked,
@@ -375,6 +377,142 @@ onMessageType("providerRequest", async (message, sender) => {
           success: true,
           result: addr ? [{ parentCapability: "eth_accounts" }] : [],
         } as import("../types").ProviderResponse;
+      }
+
+      // Transaction signing — same as SOL: coming soon
+      if (method === "eth_sendTransaction" || method === "eth_signTransaction") {
+        return {
+          success: false,
+          error: {
+            code: -32601,
+            message:
+              "Transaction signing is not yet available. This feature will be added in a future update.",
+          },
+        } as import("../types").ProviderResponse;
+      }
+
+      // Typed data signing — coming soon
+      if (
+        method === "eth_signTypedData" ||
+        method === "eth_signTypedData_v3" ||
+        method === "eth_signTypedData_v4"
+      ) {
+        return {
+          success: false,
+          error: {
+            code: -32601,
+            message:
+              "Typed data signing is not yet available. This feature will be added in a future update.",
+          },
+        } as import("../types").ProviderResponse;
+      }
+
+      // Deprecated raw hash signing — direct to personal_sign
+      if (method === "eth_sign") {
+        return {
+          success: false,
+          error: {
+            code: -32601,
+            message:
+              "eth_sign is deprecated and not supported. Use personal_sign instead.",
+          },
+        } as import("../types").ProviderResponse;
+      }
+
+      // personal_sign — message signing (same as SOL signMessage)
+      if (method === "personal_sign") {
+        if (!isUnlocked) {
+          try {
+            await openExtensionPopup();
+            isUnlocked = await waitForUnlock(60000);
+            if (!isUnlocked) {
+              return {
+                success: false,
+                error: { code: -32002, message: "Wallet unlock timeout." },
+              } as import("../types").ProviderResponse;
+            }
+          } catch (error) {
+            return {
+              success: false,
+              error: {
+                code: -32002,
+                message: `Failed to open wallet: ${error instanceof Error ? error.message : String(error)}`,
+              },
+            } as import("../types").ProviderResponse;
+          }
+        }
+        const siteConnected = await isSiteConnected(origin);
+        if (!siteConnected) {
+          return {
+            success: false,
+            error: { code: 4100, message: "The requested method requires an active connection." },
+          } as import("../types").ProviderResponse;
+        }
+        const password = await getSessionPassword();
+        if (!password) {
+          return {
+            success: false,
+            error: { code: -32002, message: "Session expired. Please unlock your wallet again." },
+          } as import("../types").ProviderResponse;
+        }
+        const messageHex = typeof params?.[0] === "string" ? (params[0] as string) : "";
+        if (!messageHex) {
+          return {
+            success: false,
+            error: { code: -32602, message: "personal_sign requires message (hex string)." },
+          } as import("../types").ProviderResponse;
+        }
+        const hexStr = messageHex.startsWith("0x") ? messageHex.slice(2) : messageHex;
+        const messageBytes: number[] = [];
+        for (let i = 0; i < hexStr.length; i += 2) {
+          messageBytes.push(parseInt(hexStr.slice(i, i + 2), 16));
+        }
+        const requestId = `sign-msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const pendingRequest: PendingSignRequest = {
+          id: requestId,
+          origin,
+          type: "message",
+          data: { message: messageBytes, display: messageHex.slice(0, 20) + (messageHex.length > 20 ? "…" : "") },
+          requestedAt: Date.now(),
+        };
+        await storePendingSignRequest(pendingRequest);
+        try {
+          await openExtensionPopup();
+        } catch {
+          // popup may already be open
+        }
+        const approved = await waitForSignApproval(requestId, 60000);
+        if (!approved) {
+          return {
+            success: false,
+            error: { code: 4001, message: "User rejected the request." },
+          } as import("../types").ProviderResponse;
+        }
+        try {
+          const activeWallet = await getActiveBurnerWalletForNetwork("ethereum");
+          if (!activeWallet) {
+            return {
+              success: false,
+              error: { code: -32000, message: "No active Ethereum wallet found." },
+            } as import("../types").ProviderResponse;
+          }
+          const { privateKey } = await getEthereumWalletForIndex(password, activeWallet.index);
+          const wallet = new Wallet(privateKey);
+          const signature = await wallet.signMessage(messageHex.startsWith("0x") ? messageHex : "0x" + messageHex);
+          return {
+            success: true,
+            result: signature,
+          } as import("../types").ProviderResponse;
+        } catch (err) {
+          console.error("[Background] personal_sign error:", err);
+          return {
+            success: false,
+            error: {
+              code: -32000,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          } as import("../types").ProviderResponse;
+        }
       }
 
       // Not implemented yet

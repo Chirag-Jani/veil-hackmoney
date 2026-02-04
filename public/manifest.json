@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Veil",
-  "version": "0.1.0",
-  "description": "Non-custodial privacy layer for Solana payments.",
+  "version": "1.0.0",
+  "description": "Privacy by default. Multi-chain wallet for Ethereum and Solana—private transfers and burner identities.",
+  "website_url": "https://veil.xyz",
   "icons": {
     "16": "veil_shield.png",
     "48": "veil_shield.png",

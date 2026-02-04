@@ -217,8 +217,9 @@ const Onboarding = () => {
                   Privacy by default. Own your on-chain identity.
                 </p>
                 <p className="text-gray-600 mt-2 text-xs">
-                  Private transfers, multi-chain swaps. Site-bound burner
-                  wallets keep you from getting exposed.
+                  Privacy by default. Multi-chain wallet for Ethereum and
+                  Solana. Private transfers and burner wallets so your
+                  on-chain identity stays unlinkable.
                 </p>
               </div>
 

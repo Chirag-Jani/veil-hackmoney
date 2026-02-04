@@ -1,5 +1,7 @@
 # Veil (HackMoney) Extension
 
+**Privacy by default. Multi-chain (EVM + Solana) wallet for private transfers and burner identities.**
+
 Veil is a privacy-focused burner wallet browser extension built for fast, disposable onchain identities.
 
 It supports **two networks**:
