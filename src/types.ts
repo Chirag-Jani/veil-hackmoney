@@ -1,5 +1,8 @@
 // Centralized types for the extension
 
+/** Supported chain: Solana (mainnet) or Ethereum (mainnet). Private transfers only on Solana. */
+export type NetworkType = "solana" | "ethereum";
+
 // Message types
 export type MessageType =
   | "checkBalances"

@@ -2,8 +2,13 @@ import { PublicKey } from "@solana/web3.js";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, Loader2, X } from "lucide-react";
 import { useState } from "react";
+import type { NetworkType } from "../types";
 import { getErrorMessage } from "../utils/errorHandler";
 import { formatAddress } from "../utils/storage";
+
+function isValidEthAddress(addr: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(addr.trim());
+}
 
 interface TransferModalProps {
   isOpen: boolean;
@@ -11,6 +16,7 @@ interface TransferModalProps {
   onTransfer: (amount: number, recipient: string) => Promise<string>;
   availableBalance: number;
   fromAddress: string;
+  network?: NetworkType;
 }
 
 const TransferModal = ({
@@ -19,11 +25,17 @@ const TransferModal = ({
   onTransfer,
   availableBalance,
   fromAddress,
+  network = "ethereum",
 }: TransferModalProps) => {
   const [amount, setAmount] = useState<string>("");
   const [recipient, setRecipient] = useState<string>("");
   const [isTransferring, setIsTransferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const isEth = network === "ethereum";
+  const symbol = isEth ? "ETH" : "SOL";
+  const feeEstimate = isEth ? 0.001 : 0.000005;
+  const minAmount = isEth ? 0.0001 : 0.000001;
 
   const handleClose = () => {
     if (!isTransferring) {
@@ -35,17 +47,14 @@ const TransferModal = ({
   };
 
   const handleMax = () => {
-    // Use full balance minus transaction fee estimate
-    const feeEstimate = 0.000005; // ~5000 lamports
     const maxAmount = Math.max(0, availableBalance - feeEstimate);
-    setAmount(maxAmount.toFixed(9));
+    setAmount(maxAmount.toFixed(isEth ? 6 : 9));
     setError(null);
   };
 
   const handleTransfer = async () => {
     const transferAmount = parseFloat(amount);
 
-    // Validation
     if (isNaN(transferAmount) || transferAmount <= 0) {
       setError("Please enter a valid amount");
       return;
@@ -56,30 +65,35 @@ const TransferModal = ({
       return;
     }
 
-    if (transferAmount < 0.000001) {
-      setError("Minimum transfer is 0.000001 SOL");
+    if (transferAmount < minAmount) {
+      setError(`Minimum transfer is ${minAmount} ${symbol}`);
       return;
     }
 
-    if (!recipient || recipient.length < 32) {
+    if (!recipient || recipient.trim().length === 0) {
       setError("Please enter a valid recipient address");
       return;
     }
 
-    // Validate Solana address
-    try {
-      new PublicKey(recipient);
-    } catch {
-      setError("Invalid Solana address");
-      return;
+    if (isEth) {
+      if (!isValidEthAddress(recipient)) {
+        setError("Invalid Ethereum address (0x + 40 hex characters)");
+        return;
+      }
+    } else {
+      try {
+        new PublicKey(recipient);
+      } catch {
+        setError("Invalid Solana address");
+        return;
+      }
     }
 
     setIsTransferring(true);
     setError(null);
 
     try {
-      await onTransfer(transferAmount, recipient);
-      // Success - close modal after a brief delay
+      await onTransfer(transferAmount, recipient.trim());
       setTimeout(() => {
         setAmount("");
         setRecipient("");
@@ -88,19 +102,20 @@ const TransferModal = ({
       }, 1000);
     } catch (err) {
       console.error("[TransferModal] Transfer error:", err);
-      const errorMsg = getErrorMessage(err, "transferring funds");
-      console.error("[TransferModal] Error message:", errorMsg);
-      setError(errorMsg);
+      setError(getErrorMessage(err, "transferring funds"));
       setIsTransferring(false);
     }
   };
 
   const transferAmount = parseFloat(amount) || 0;
+  const recipientValid = isEth
+    ? isValidEthAddress(recipient)
+    : recipient.length >= 32;
   const isValid =
     transferAmount > 0 &&
     transferAmount <= availableBalance &&
-    transferAmount >= 0.000001 &&
-    recipient.length >= 32;
+    transferAmount >= minAmount &&
+    recipientValid;
 
   return (
     <AnimatePresence>
@@ -133,10 +148,10 @@ const TransferModal = ({
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-white">
-                      Transfer SOL
+                      Transfer {symbol}
                     </h3>
                     <p className="text-xs text-gray-500">
-                      Send SOL to another address
+                      Send {symbol} to another address
                     </p>
                   </div>
                 </div>
@@ -160,7 +175,7 @@ const TransferModal = ({
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-xs text-gray-500">Available</span>
                   <span className="text-sm font-semibold text-white">
-                    {availableBalance.toFixed(4)} SOL
+                    {availableBalance.toFixed(isEth ? 6 : 4)} {symbol}
                   </span>
                 </div>
               </div>
@@ -179,8 +194,8 @@ const TransferModal = ({
                       setError(null);
                     }}
                     placeholder="0.00"
-                    step="0.000001"
-                    min="0.000001"
+                    step={minAmount}
+                    min={minAmount}
                     max={availableBalance}
                     disabled={isTransferring}
                     className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -207,7 +222,7 @@ const TransferModal = ({
                     setRecipient(e.target.value);
                     setError(null);
                   }}
-                  placeholder="Enter Solana address"
+                  placeholder={isEth ? "0x..." : "Enter Solana address"}
                   disabled={isTransferring}
                   className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm"
                 />
@@ -240,7 +255,7 @@ const TransferModal = ({
                       <span>
                         Transfer{" "}
                         {transferAmount > 0
-                          ? `${transferAmount.toFixed(4)} SOL`
+                          ? `${transferAmount.toFixed(isEth ? 6 : 4)} ${symbol}`
                           : ""}
                       </span>
                     </>

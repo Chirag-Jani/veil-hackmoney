@@ -4,6 +4,7 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
+import { JsonRpcProvider, parseEther, Wallet } from "ethers";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownUp,
@@ -30,18 +31,25 @@ import SignApproval from "../components/SignApproval";
 import TransferModal from "../components/TransferModal";
 import UnlockWallet from "../components/UnlockWallet";
 import WithdrawModal from "../components/WithdrawModal";
-import type { CheckBalancesResponse } from "../types";
+import type { CheckBalancesResponse, NetworkType } from "../types";
 import { getErrorMessage, logError } from "../utils/errorHandler";
+import { getEthRPCManager } from "../utils/ethRpcManager";
 import {
   generateBurnerKeypair,
   getDecryptedSeed,
+  getEthereumWalletForIndex,
   getKeypairForIndex,
   hasWallet,
 } from "../utils/keyManager";
 import { sendMessage } from "../utils/messaging";
 import { getPrivacyCashService } from "../utils/privacyCashService";
 import { createRPCManager } from "../utils/rpcManager";
-import { getPrivacyCashMode } from "../utils/settings";
+import {
+  getActiveNetwork,
+  getPrivacyCashMode,
+  setActiveBurnerIndex,
+  setActiveNetwork,
+} from "../utils/settings";
 import {
   archiveBurnerWallet,
   formatAddress,
@@ -105,18 +113,37 @@ const Home = () => {
   const [pendingSignRequest, setPendingSignRequest] =
     useState<PendingSignRequest | null>(null);
   const [connectedSites, setConnectedSites] = useState<ConnectedSite[]>([]);
+  const [activeNetwork, setActiveNetworkState] =
+    useState<NetworkType>("ethereum");
+  const [ethPrice, setEthPrice] = useState<number | null>(null);
 
-  const loadWallets = useCallback(async () => {
-    try {
-      const wallets = await getAllBurnerWallets();
-      setBurnerWallets(wallets);
-      if (wallets.length > 0) {
-        setActiveWallet(wallets.find((w) => w.isActive) || wallets[0]);
+  const loadWallets = useCallback(
+    async (network?: NetworkType) => {
+      const net = network ?? activeNetwork;
+      try {
+        const wallets = await getAllBurnerWallets(net);
+        setBurnerWallets(wallets);
+        if (wallets.length > 0) {
+          const active = wallets.find((w) => w.isActive) || wallets[0];
+          setActiveWallet(active);
+        } else {
+          setActiveWallet(null);
+        }
+      } catch (error) {
+        console.error("[Veil] Error loading wallets:", error);
       }
-    } catch (error) {
-      console.error("[Veil] Error loading wallets:", error);
-    }
-  }, []);
+    },
+    [activeNetwork]
+  );
+
+  const switchNetwork = useCallback(
+    async (network: NetworkType) => {
+      setActiveNetworkState(network);
+      await setActiveNetwork(network);
+      await loadWallets(network);
+    },
+    [loadWallets]
+  );
 
   // Load connected sites
   const loadConnectedSites = useCallback(async () => {
@@ -228,20 +255,19 @@ const Home = () => {
   );
 
   const generateNewBurner = useCallback(
-    async (pwd?: string) => {
-      // Try to get password from: parameter, state, or sessionStorage (for first-time generation)
+    async (pwd?: string, networkOverride?: NetworkType) => {
+      const net = networkOverride ?? activeNetwork;
       let currentPassword = pwd || password;
       if (!currentPassword) {
         const tempPassword = sessionStorage.getItem("veil:temp_password");
         if (tempPassword) {
           currentPassword = tempPassword;
-          setPassword(tempPassword); // Store in state for future use
-          sessionStorage.removeItem("veil:temp_password"); // Clear temp storage
+          setPassword(tempPassword);
+          sessionStorage.removeItem("veil:temp_password");
         }
       }
 
       if (!currentPassword) {
-        // Password not available - gracefully lock wallet and show unlock screen
         setIsLocked(true);
         setPassword("");
         sessionStorage.removeItem("veil:session_password");
@@ -250,41 +276,58 @@ const Home = () => {
 
       setIsGenerating(true);
       try {
-        // Check existing active wallets and archive those with balance < 0.001 SOL
-        const existingWallets = await getAllBurnerWallets();
+        const existingWallets = await getAllBurnerWallets(net);
         const activeWallets = existingWallets.filter(
           (w) => w.isActive && !w.archived
         );
+        const minBalance = net === "solana" ? 0.001 : 0.0001;
 
         for (const wallet of activeWallets) {
-          if (wallet.balance < 0.001) {
-            // Archive wallet with balance < 0.001 SOL
-            await archiveBurnerWallet(wallet.index);
+          if (wallet.balance < minBalance) {
+            await archiveBurnerWallet(wallet.index, wallet.network);
           }
         }
 
         const seed = await getDecryptedSeed(currentPassword);
-        const { keypair, index } = await generateBurnerKeypair(seed);
-        const address = getAddressFromKeypair(keypair);
+        const result = await generateBurnerKeypair(seed, net);
 
-        // Get next account number (Account 1, Account 2, etc.)
-        const accountNumber = await getNextAccountNumber();
-        const accountName = `Account ${accountNumber}`;
+        if (net === "solana" && "keypair" in result) {
+          const { keypair, index } = result;
+          const address = getAddressFromKeypair(keypair);
+          const accountNumber = await getNextAccountNumber(net);
+          const accountName = `Account ${accountNumber}`;
+          const newWallet: BurnerWallet = {
+            id: Date.now(),
+            address: formatAddress(address),
+            fullAddress: address,
+            balance: 0,
+            site: accountName,
+            isActive: true,
+            index,
+            network: "solana",
+          };
+          await storeBurnerWallet(newWallet);
+          await setActiveBurnerIndex("solana", index);
+        } else if (net === "ethereum" && "address" in result) {
+          const { address, index } = result;
+          const accountNumber = await getNextAccountNumber(net);
+          const accountName = `Account ${accountNumber}`;
+          const newWallet: BurnerWallet = {
+            id: Date.now(),
+            address: formatAddress(address),
+            fullAddress: address,
+            balance: 0,
+            site: accountName,
+            isActive: true,
+            index,
+            network: "ethereum",
+          };
+          await storeBurnerWallet(newWallet);
+          await setActiveBurnerIndex("ethereum", index);
+        }
 
-        const newWallet: BurnerWallet = {
-          id: Date.now(),
-          address: formatAddress(address),
-          fullAddress: address,
-          balance: 0,
-          site: accountName,
-          isActive: true, // Make first burner active
-          index,
-        };
-
-        await storeBurnerWallet(newWallet);
-        await loadWallets();
+        await loadWallets(net);
       } catch (error) {
-        // Handle errors gracefully - lock wallet instead of showing alerts
         console.error("[Veil] Error generating burner:", error);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
@@ -293,12 +336,10 @@ const Home = () => {
           errorMessage.includes("decrypt") ||
           errorMessage.includes("password")
         ) {
-          // Password-related errors - lock wallet
           setIsLocked(true);
           setPassword("");
           sessionStorage.removeItem("veil:session_password");
         } else {
-          // Other errors - also lock wallet for security
           setIsLocked(true);
           setPassword("");
           sessionStorage.removeItem("veil:session_password");
@@ -307,7 +348,7 @@ const Home = () => {
         setIsGenerating(false);
       }
     },
-    [password, loadWallets]
+    [password, loadWallets, activeNetwork]
   );
 
   const checkWalletState = useCallback(async () => {
@@ -350,6 +391,9 @@ const Home = () => {
       const privacyCashEnabled = await getPrivacyCashMode();
       setPrivacyCashMode(privacyCashEnabled);
 
+      const net = await getActiveNetwork();
+      setActiveNetworkState(net);
+
       if (!shouldBeLocked) {
         // Restore password from sessionStorage if available
         const sessionPassword = sessionStorage.getItem("veil:session_password");
@@ -357,10 +401,10 @@ const Home = () => {
           setPassword(sessionPassword);
         }
 
-        await loadWallets();
+        await loadWallets(net);
 
         // Auto-generate first burner if none exist and wallet is unlocked
-        const wallets = await getAllBurnerWallets();
+        const wallets = await getAllBurnerWallets(net);
         if (wallets.length === 0 && !isGenerating) {
           // Try to get password from state or sessionStorage
           const currentPassword =
@@ -372,7 +416,7 @@ const Home = () => {
               setPassword(currentPassword); // Store in state
             }
             // Generate burner - errors will be handled gracefully inside
-            await generateNewBurner(currentPassword);
+            await generateNewBurner(currentPassword, net);
           } else {
             // No password available - lock wallet gracefully
             setIsLocked(true);
@@ -476,6 +520,27 @@ const Home = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch ETH price when on Ethereum network
+  useEffect(() => {
+    if (activeNetwork !== "ethereum") return;
+    const fetchEthPrice = async () => {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ethereum?.usd) setEthPrice(data.ethereum.usd);
+        }
+      } catch (e) {
+        console.error("[Veil] Error fetching ETH price:", e);
+      }
+    };
+    fetchEthPrice();
+    const interval = setInterval(fetchEthPrice, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [activeNetwork]);
+
   const handleUnlock = async (unlockPassword: string) => {
     try {
       setPassword(unlockPassword);
@@ -534,10 +599,14 @@ const Home = () => {
     }
   };
 
-  // Load persisted private balance when wallet changes
+  // Load persisted private balance when wallet changes (Solana only)
   const activeWalletIndex = activeWallet?.index;
   useEffect(() => {
-    if (activeWalletIndex !== undefined && privacyCashMode) {
+    if (
+      activeNetwork === "solana" &&
+      activeWalletIndex !== undefined &&
+      privacyCashMode
+    ) {
       // Immediately load persisted balance from storage
       getStoredPrivateBalance(activeWalletIndex).then((storedBalance) => {
         if (storedBalance > 0) {
@@ -545,17 +614,15 @@ const Home = () => {
         }
       });
     }
-  }, [activeWalletIndex, privacyCashMode]);
+  }, [activeNetwork, activeWalletIndex, privacyCashMode]);
 
-  // Initialize Privacy Cash service and refresh balance when password is available
-  // This runs after unlock or when service needs to be initialized
+  // Initialize Privacy Cash service (Solana only) and refresh balance when password is available
   useEffect(() => {
-    // Get password from state or sessionStorage
     const getPassword = () => {
       if (password) return password;
       const sessionPassword = sessionStorage.getItem("veil:session_password");
       if (sessionPassword) {
-        setPassword(sessionPassword); // Restore to state
+        setPassword(sessionPassword);
         return sessionPassword;
       }
       return null;
@@ -564,6 +631,7 @@ const Home = () => {
     const currentPassword = getPassword();
 
     if (
+      activeNetwork === "solana" &&
       !isLocked &&
       activeWalletIndex !== undefined &&
       currentPassword &&
@@ -617,7 +685,7 @@ const Home = () => {
         isMounted = false;
       };
     }
-  }, [isLocked, activeWalletIndex, password, privacyCashMode]);
+  }, [activeNetwork, isLocked, activeWalletIndex, password, privacyCashMode]);
 
   // Periodically refresh balances and check for incoming SOL
   // Only depend on activeWalletIndex to prevent re-triggering loops
@@ -641,8 +709,7 @@ const Home = () => {
             "updates" in response &&
             response.updates
           ) {
-            // Only update the wallet list, don't change active wallet
-            const updatedWallets = await getAllBurnerWallets();
+            const updatedWallets = await getAllBurnerWallets(activeNetwork);
             if (!isMounted) return;
 
             setBurnerWallets(updatedWallets);
@@ -675,7 +742,7 @@ const Home = () => {
         clearInterval(interval);
       };
     }
-  }, [isLocked, activeWalletIndex]);
+  }, [isLocked, activeWalletIndex, activeNetwork]);
 
   // Deposit handler using real Privacy Cash service
   const handleDeposit = async (amount: number): Promise<void> => {
@@ -1470,20 +1537,7 @@ const Home = () => {
       throw new Error("Session expired. Please unlock your wallet again.");
     }
 
-    // Check if there's enough balance for the transfer + fees
-    const feeEstimate = 0.000005; // ~5000 lamports
-    const requiredBalance = amount + feeEstimate;
-    if (activeWallet.balance < requiredBalance) {
-      throw new Error(
-        `Insufficient balance. You need at least ${requiredBalance.toFixed(
-          6
-        )} SOL (including transaction fees).`
-      );
-    }
-
     const txId = generateTransactionId();
-
-    // Record pending transaction
     const transaction: TransactionRecord = {
       id: txId,
       type: "transfer",
@@ -1495,6 +1549,55 @@ const Home = () => {
       status: "pending",
     };
     await storeTransaction(transaction);
+
+    if (activeWallet.network === "ethereum") {
+      const feeEstimateEth = 0.001;
+      const requiredBalanceEth = amount + feeEstimateEth;
+      if (activeWallet.balance < requiredBalanceEth) {
+        transaction.status = "failed";
+        transaction.error = `Insufficient balance. Need at least ${requiredBalanceEth.toFixed(
+          6
+        )} ETH (including gas).`;
+        await storeTransaction(transaction);
+        throw new Error(transaction.error);
+      }
+      try {
+        const { privateKey } = await getEthereumWalletForIndex(
+          currentPassword,
+          activeWallet.index
+        );
+        const ethRpc = getEthRPCManager();
+        const tx = await ethRpc.executeWithRetry(async (rpcUrl) => {
+          const provider = new JsonRpcProvider(rpcUrl);
+          const wallet = new Wallet(privateKey, provider);
+          return wallet.sendTransaction({
+            to: recipient,
+            value: parseEther(amount.toString()),
+          });
+        });
+        transaction.status = "confirmed";
+        transaction.signature = tx.hash;
+        await storeTransaction(transaction);
+        await loadWallets(activeNetwork);
+        return tx.hash;
+      } catch (err) {
+        transaction.status = "failed";
+        transaction.error = getErrorMessage(err, "transferring ETH");
+        await storeTransaction(transaction);
+        throw err;
+      }
+    }
+
+    const feeEstimate = 0.000005; // ~5000 lamports
+    const requiredBalance = amount + feeEstimate;
+    if (activeWallet.balance < requiredBalance) {
+      transaction.status = "failed";
+      transaction.error = `Insufficient balance. You need at least ${requiredBalance.toFixed(
+        6
+      )} SOL (including transaction fees).`;
+      await storeTransaction(transaction);
+      throw new Error(transaction.error);
+    }
 
     try {
       const rpcManager = createRPCManager();
@@ -1605,14 +1708,10 @@ const Home = () => {
         }
       );
 
-      // Reload wallets to update balance
-      await loadWallets();
-
-      // Update transaction as confirmed
+      await loadWallets(activeNetwork);
       transaction.status = "confirmed";
       transaction.signature = signature;
       await storeTransaction(transaction);
-
       return signature;
     } catch (error) {
       console.error("[Veil] Transfer error details:", error);
@@ -1754,20 +1853,65 @@ const Home = () => {
 
       {/* Main Content */}
       <div className="flex-1 px-3 pt-2 pb-3 z-10 flex flex-col overflow-y-auto">
+        {/* Network switcher */}
+        <div
+          role="tablist"
+          aria-label="Network"
+          className="flex rounded-lg bg-white/[0.04] border border-white/[0.06] p-0.5 mb-3"
+        >
+          <button
+            role="tab"
+            aria-selected={activeNetwork === "ethereum"}
+            onClick={() => switchNetwork("ethereum")}
+            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
+              activeNetwork === "ethereum"
+                ? "bg-white/10 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Ethereum
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeNetwork === "solana"}
+            onClick={() => switchNetwork("solana")}
+            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
+              activeNetwork === "solana"
+                ? "bg-white/10 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Solana
+          </button>
+        </div>
+
         {/* Total Balance Display */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="text-center mt-6 mb-4"
+          className="text-center mt-0 mb-4"
         >
           <h1 className="text-4xl font-bold text-white mb-1">
-            ${(totalBalance * (solPrice || 145)).toFixed(2)}
+            $
+            {(
+              totalBalance *
+              (activeNetwork === "ethereum"
+                ? ethPrice ?? 2400
+                : solPrice ?? 145)
+            ).toFixed(2)}
           </h1>
-          <p className="text-sm text-gray-400">{totalBalance.toFixed(4)} SOL</p>
+          <p className="text-sm text-gray-400">
+            {totalBalance.toFixed(activeNetwork === "ethereum" ? 6 : 4)}{" "}
+            {activeNetwork === "ethereum" ? "ETH" : "SOL"}
+          </p>
         </motion.div>
 
-        {/* Action Buttons - Send, Send Privately, Swap */}
-        <div className="grid grid-cols-3 gap-2.5 mb-4">
+        {/* Action Buttons - Transfer, Private Transfer (Solana only), Swap */}
+        <div
+          className={`grid gap-2.5 mb-4 ${
+            activeNetwork === "solana" ? "grid-cols-3" : "grid-cols-2"
+          }`}
+        >
           <button
             onClick={() => {
               if (activeWallet && activeWallet.balance > 0) {
@@ -1780,20 +1924,22 @@ const Home = () => {
             <Send className="w-5 h-5 text-blue-400 group-hover:text-blue-300 transition-colors" />
             <span className="text-xs font-medium text-white">Transfer</span>
           </button>
-          <button
-            onClick={() => {
-              if (activeWallet && activeWallet.balance > 0) {
-                setShowSendPrivatelyModal(true);
-              }
-            }}
-            disabled={!activeWallet || (activeWallet?.balance ?? 0) === 0}
-            className="group flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-purple-600/80 to-pink-500/80 hover:from-purple-500/90 hover:to-pink-400/90 transition-all duration-150 rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.97]"
-          >
-            <Shield className="w-5 h-5 text-white" />
-            <span className="text-xs font-medium text-white text-center leading-tight">
-              Private Transfer
-            </span>
-          </button>
+          {activeNetwork === "solana" && (
+            <button
+              onClick={() => {
+                if (activeWallet && activeWallet.balance > 0) {
+                  setShowSendPrivatelyModal(true);
+                }
+              }}
+              disabled={!activeWallet || (activeWallet?.balance ?? 0) === 0}
+              className="group flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gradient-to-br from-purple-600/80 to-pink-500/80 hover:from-purple-500/90 hover:to-pink-400/90 transition-all duration-150 rounded-2xl disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.97]"
+            >
+              <Shield className="w-5 h-5 text-white" />
+              <span className="text-xs font-medium text-white text-center leading-tight">
+                Private Transfer
+              </span>
+            </button>
+          )}
           <button
             onClick={() => {
               setComingSoonFeature("Swap");
@@ -1812,7 +1958,7 @@ const Home = () => {
             <h2 className="text-sm font-semibold text-white">Tokens</h2>
           </div>
 
-          {/* SOL Token Card */}
+          {/* Native Token Card (SOL or ETH) */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -1821,52 +1967,62 @@ const Home = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
-                  <img
-                    src={
-                      typeof chrome !== "undefined" && chrome.runtime
-                        ? chrome.runtime.getURL("solana.svg")
-                        : "/solana.svg"
-                    }
-                    alt="Solana"
-                    className="w-6 h-6 object-contain"
-                    onError={(e) => {
-                      // Fallback to text if image fails to load
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = "none";
-                      const parent = target.parentElement;
-                      if (parent && !parent.querySelector(".fallback-text")) {
-                        const fallback = document.createElement("span");
-                        fallback.className =
-                          "fallback-text text-white font-bold text-sm";
-                        fallback.textContent = "SOL";
-                        parent.appendChild(fallback);
+                  {activeNetwork === "solana" ? (
+                    <img
+                      src={
+                        typeof chrome !== "undefined" && chrome.runtime
+                          ? chrome.runtime.getURL("solana.svg")
+                          : "/solana.svg"
                       }
-                    }}
-                  />
+                      alt="Solana"
+                      className="w-6 h-6 object-contain"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = "none";
+                        const parent = target.parentElement;
+                        if (parent && !parent.querySelector(".fallback-text")) {
+                          const fallback = document.createElement("span");
+                          fallback.className =
+                            "fallback-text text-white font-bold text-sm";
+                          fallback.textContent = "SOL";
+                          parent.appendChild(fallback);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className="text-white font-bold text-sm">ETH</span>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-white">
-                      Solana
+                      {activeNetwork === "solana" ? "Solana" : "Ethereum"}
                     </span>
                     <Check className="w-3.5 h-3.5 text-purple-400" />
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    {totalBalance.toFixed(5)} SOL
+                    {totalBalance.toFixed(activeNetwork === "ethereum" ? 6 : 5)}{" "}
+                    {activeNetwork === "ethereum" ? "ETH" : "SOL"}
                   </p>
                 </div>
               </div>
               <div className="text-right">
                 <p className="text-sm font-semibold text-white">
-                  ${(totalBalance * (solPrice || 145)).toFixed(2)}
+                  $
+                  {(
+                    totalBalance *
+                    (activeNetwork === "ethereum"
+                      ? ethPrice ?? 2400
+                      : solPrice ?? 145)
+                  ).toFixed(2)}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">-</p>
               </div>
             </div>
           </motion.div>
 
-          {/* Private Balance Card - Show when Privacy Cash mode is enabled */}
-          {privacyCashMode && (
+          {/* Private Balance Card - Solana only, when Privacy Cash mode is enabled */}
+          {activeNetwork === "solana" && privacyCashMode && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -1915,8 +2071,8 @@ const Home = () => {
 
         {/* Additional Actions */}
         <div className="flex flex-col gap-2 mb-2">
-          {/* Privacy Cash buttons - Only show when Privacy Cash mode is enabled */}
-          {privacyCashMode && (
+          {/* Privacy Cash buttons - Solana only, when Privacy Cash mode is enabled */}
+          {activeNetwork === "solana" && privacyCashMode && (
             <>
               {/* Deposit to Privacy - Standalone */}
               {activeWallet && activeWallet.balance > 0 && (
@@ -1946,7 +2102,7 @@ const Home = () => {
           )}
 
           <button
-            onClick={() => generateNewBurner()}
+            onClick={() => generateNewBurner(undefined, activeNetwork)}
             disabled={isGenerating || (activeWallet?.balance ?? 0) > 0}
             className={`py-2.5 px-4 font-medium rounded-xl text-sm border flex items-center justify-center gap-2 transition-all ${
               !activeWallet || (activeWallet.balance ?? 0) === 0
@@ -2000,8 +2156,9 @@ const Home = () => {
                 {burnerWallets.map((wallet) => (
                   <button
                     key={wallet.id}
-                    onClick={() => {
+                    onClick={async () => {
                       setActiveWallet(wallet);
+                      await setActiveBurnerIndex(wallet.network, wallet.index);
                       setShowWalletList(false);
                     }}
                     className={`w-full p-2.5 rounded-lg flex items-center gap-2.5 transition-colors mb-1.5 ${
@@ -2034,10 +2191,17 @@ const Home = () => {
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-bold text-white">
-                        {wallet.balance} SOL
+                        {wallet.balance}{" "}
+                        {wallet.network === "ethereum" ? "ETH" : "SOL"}
                       </p>
                       <p className="text-[10px] text-gray-500">
-                        ${(wallet.balance * (solPrice || 145)).toFixed(2)}
+                        $
+                        {(
+                          wallet.balance *
+                          (wallet.network === "ethereum"
+                            ? ethPrice ?? 2400
+                            : solPrice ?? 145)
+                        ).toFixed(2)}
                       </p>
                     </div>
                   </button>
@@ -2046,7 +2210,7 @@ const Home = () => {
                 <button
                   onClick={() => {
                     setShowWalletList(false);
-                    generateNewBurner();
+                    generateNewBurner(undefined, activeNetwork);
                   }}
                   disabled={isGenerating}
                   className="w-full p-2.5 rounded-lg flex items-center gap-2.5 bg-white/5 hover:bg-white/10 border border-dashed border-white/20 transition-colors mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2268,6 +2432,7 @@ const Home = () => {
           onTransfer={handleTransfer}
           availableBalance={activeWallet.balance}
           fromAddress={activeWallet.fullAddress}
+          network={activeNetwork}
         />
       )}
 

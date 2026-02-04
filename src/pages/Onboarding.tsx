@@ -13,6 +13,7 @@ import {
   validateMnemonic,
   validatePrivateKey,
 } from "../utils/keyManager";
+import { setActiveBurnerIndex } from "../utils/settings";
 import {
   formatAddress,
   getAddressFromKeypair,
@@ -152,13 +153,15 @@ const Onboarding = () => {
           id: Date.now(),
           address: formatAddress(address),
           fullAddress: address,
-          balance: 0, // Will be updated by balance monitor
+          balance: 0,
           site: "Imported Wallet",
           isActive: true,
           index: 0,
+          network: "solana",
         };
 
         await storeBurnerWallet(importedWallet);
+        await setActiveBurnerIndex("solana", 0);
       }
 
       await unlockWallet();

@@ -1,12 +1,14 @@
 /**
  * Key Management utilities for Veil wallet
- * Handles BIP39 mnemonic generation, seed derivation, and Solana keypair management
+ * Handles BIP39 mnemonic generation, seed derivation, Solana and Ethereum keypair management
  */
 
 import { Keypair } from "@solana/web3.js";
 import * as bip39 from "bip39";
 import englishWordlist from "bip39/src/wordlists/english.json";
 import bs58 from "bs58";
+import { HDNodeWallet } from "ethers";
+import type { NetworkType } from "../types";
 import { decrypt, encrypt } from "./crypto";
 
 // Import ed25519-hd-key using namespace import to handle CommonJS
@@ -60,19 +62,25 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
-// Storage keys
+// Storage keys (burner index and retired are per-network: suffix :solana or :ethereum)
 const STORAGE_KEYS = {
   ENCRYPTED_SEED: "veil:encrypted_seed",
   ENCRYPTED_SALT: "veil:encrypted_salt",
   ENCRYPTED_IV: "veil:encrypted_iv",
   BURNER_INDEX: "veil:burner_index",
   RETIRED_BURNERS: "veil:retired_burners",
-  // For private key imports - stores the original secret key
   IMPORTED_PRIVATE_KEY: "veil:imported_private_key",
   IMPORTED_PK_SALT: "veil:imported_pk_salt",
   IMPORTED_PK_IV: "veil:imported_pk_iv",
-  IMPORT_TYPE: "veil:import_type", // 'seed' or 'privateKey'
+  IMPORT_TYPE: "veil:import_type",
 } as const;
+
+function burnerIndexKey(network: NetworkType): string {
+  return `${STORAGE_KEYS.BURNER_INDEX}:${network}`;
+}
+function retiredBurnersKey(network: NetworkType): string {
+  return `${STORAGE_KEYS.RETIRED_BURNERS}:${network}`;
+}
 
 /**
  * Generate a new BIP39 mnemonic phrase (12 words)
@@ -371,65 +379,109 @@ export async function hasWallet(): Promise<boolean> {
 }
 
 /**
- * Get the next burner wallet index
+ * Get the next burner wallet index for a network
  */
-export async function getNextBurnerIndex(): Promise<number> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.BURNER_INDEX);
-  const currentIndex = result[STORAGE_KEYS.BURNER_INDEX] || 0;
-  return currentIndex;
+export async function getNextBurnerIndex(
+  network: NetworkType
+): Promise<number> {
+  const key = burnerIndexKey(network);
+  const result = await chrome.storage.local.get(key);
+  const currentIndex = result[key];
+  if (typeof currentIndex === "number" && Number.isInteger(currentIndex)) {
+    return currentIndex;
+  }
+  if (network === "solana") {
+    const legacy = await chrome.storage.local.get(STORAGE_KEYS.BURNER_INDEX);
+    return (legacy[STORAGE_KEYS.BURNER_INDEX] as number) || 0;
+  }
+  return 0;
 }
 
 /**
- * Increment and save the burner wallet index
+ * Increment and save the burner wallet index for a network
  */
-export async function incrementBurnerIndex(): Promise<number> {
-  const currentIndex = await getNextBurnerIndex();
+export async function incrementBurnerIndex(
+  network: NetworkType
+): Promise<number> {
+  const currentIndex = await getNextBurnerIndex(network);
   const nextIndex = currentIndex + 1;
-  await chrome.storage.local.set({ [STORAGE_KEYS.BURNER_INDEX]: nextIndex });
+  await chrome.storage.local.set({ [burnerIndexKey(network)]: nextIndex });
   return nextIndex;
 }
 
 /**
- * Get list of retired burner indices
+ * Get list of retired burner indices for a network
  */
-export async function getRetiredBurners(): Promise<number[]> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.RETIRED_BURNERS);
-  return result[STORAGE_KEYS.RETIRED_BURNERS] || [];
+export async function getRetiredBurners(
+  network: NetworkType
+): Promise<number[]> {
+  const key = retiredBurnersKey(network);
+  const result = await chrome.storage.local.get(key);
+  const arr = result[key];
+  if (Array.isArray(arr)) return arr;
+  if (network === "solana") {
+    const legacy = await chrome.storage.local.get(STORAGE_KEYS.RETIRED_BURNERS);
+    return (legacy[STORAGE_KEYS.RETIRED_BURNERS] as number[]) || [];
+  }
+  return [];
 }
 
 /**
- * Mark a burner as retired
+ * Mark a burner as retired for a network
  */
-export async function retireBurner(index: number): Promise<void> {
-  const retired = await getRetiredBurners();
+export async function retireBurner(
+  index: number,
+  network: NetworkType
+): Promise<void> {
+  const retired = await getRetiredBurners(network);
   if (!retired.includes(index)) {
     retired.push(index);
-    await chrome.storage.local.set({ [STORAGE_KEYS.RETIRED_BURNERS]: retired });
+    await chrome.storage.local.set({ [retiredBurnersKey(network)]: retired });
   }
 }
 
 /**
- * Generate a new burner wallet keypair
+ * Derive Ethereum address and private key from BIP39 seed (64 bytes) and index.
+ * Path: m/44'/60'/0'/0/index
+ */
+export function deriveEthereumWalletFromSeed(
+  seed: Uint8Array,
+  index: number
+): { address: string; privateKey: string } {
+  if (seed.length !== 64) {
+    throw new Error("Ethereum derivation requires 64-byte BIP39 seed");
+  }
+  const root = HDNodeWallet.fromSeed(seed);
+  const path = `m/44'/60'/0'/0/${index}`;
+  const child = root.derivePath(path);
+  return { address: child.address, privateKey: child.privateKey };
+}
+
+/**
+ * Generate a new burner wallet keypair for the given network
  */
 export async function generateBurnerKeypair(
-  seed: Uint8Array
-): Promise<{ keypair: Keypair; index: number }> {
-  // Get retired burners to skip them
-  const retired = await getRetiredBurners();
-  let index = await getNextBurnerIndex();
+  seed: Uint8Array,
+  network: NetworkType
+): Promise<
+  | { keypair: Keypair; index: number }
+  | { address: string; privateKey: string; index: number }
+> {
+  const retired = await getRetiredBurners(network);
+  let index = await getNextBurnerIndex(network);
 
-  // Find next non-retired index
   while (retired.includes(index)) {
-    index = await incrementBurnerIndex();
+    index = await incrementBurnerIndex(network);
   }
 
-  // Generate keypair for this index
-  const keypair = deriveKeypairFromSeed(seed, index);
+  await incrementBurnerIndex(network);
 
-  // Increment index for next time
-  await incrementBurnerIndex();
-
-  return { keypair, index };
+  if (network === "solana") {
+    const keypair = deriveKeypairFromSeed(seed, index);
+    return { keypair, index };
+  }
+  const eth = deriveEthereumWalletFromSeed(seed, index);
+  return { address: eth.address, privateKey: eth.privateKey, index };
 }
 
 /**
@@ -440,23 +492,27 @@ export function recoverBurnerKeypair(seed: Uint8Array, index: number): Keypair {
 }
 
 /**
- * Get keypair for a wallet index, handling private key imports correctly
- * For private key imports: index 0 returns the imported keypair
- * For seed imports: uses HD derivation for all indices
+ * Get Solana keypair for a wallet index
  */
 export async function getKeypairForIndex(
   password: string,
   index: number
 ): Promise<Keypair> {
-  // Check if this is a private key import and index 0
   if (index === 0) {
     const importedKeypair = await getImportedKeypair(password);
-    if (importedKeypair) {
-      return importedKeypair;
-    }
+    if (importedKeypair) return importedKeypair;
   }
-
-  // Fall back to HD derivation from seed
   const seed = await getDecryptedSeed(password);
   return deriveKeypairFromSeed(seed, index);
+}
+
+/**
+ * Get Ethereum wallet (address + privateKey) for a wallet index
+ */
+export async function getEthereumWalletForIndex(
+  password: string,
+  index: number
+): Promise<{ address: string; privateKey: string }> {
+  const seed = await getDecryptedSeed(password);
+  return deriveEthereumWalletFromSeed(seed, index);
 }

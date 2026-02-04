@@ -6,7 +6,7 @@
 import { Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import nacl from "tweetnacl";
 import { getKeypairForIndex } from "./keyManager";
-import { getAllBurnerWallets } from "./storage";
+import { getActiveBurnerWallet as getActiveBurnerWalletFromStorage } from "./storage";
 import { isSessionValid, isWalletLocked } from "./walletLock";
 
 export interface ProviderAccount {
@@ -29,19 +29,16 @@ export interface SignMessageResponse {
 }
 
 /**
- * Get the active burner wallet
+ * Get the active Solana burner wallet (for window.solana provider)
  */
 export async function getActiveBurnerWallet() {
-  const wallets = await getAllBurnerWallets();
-  const activeWallet = wallets.find((w) => w.isActive && !w.archived);
-
-  if (!activeWallet) {
+  const active = await getActiveBurnerWalletFromStorage("solana");
+  if (!active) {
     throw new Error(
       "No active wallet found. Please generate a burner wallet first."
     );
   }
-
-  return activeWallet;
+  return active;
 }
 
 /**

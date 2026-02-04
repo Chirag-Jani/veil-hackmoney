@@ -1,219 +1,153 @@
 /**
- * RPC Manager for Privacy Cash SDK
+ * RPC Manager for Solana
  *
- * Handles RPC endpoint rotation and failover to avoid rate limits
- * and provide reliable connection to Solana network.
+ * Multiple RPCs: pick random RPC per attempt. On failure, retry with a new
+ * random RPC up to 3 times.
  */
 
 import { Connection } from "@solana/web3.js";
 
-interface RPCManagerOptions {
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 3000;
+
+export interface RPCManagerOptions {
   rpcUrls: string[];
   maxRetries?: number;
   retryDelay?: number;
 }
 
-class RPCManager {
-  private rpcUrls: string[];
-  private currentIndex: number = 0;
-  private maxRetries: number;
-  private retryDelay: number;
-  private connectionCache: Map<string, Connection> = new Map();
+function isRateLimitError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("429") ||
+    message.includes("403") ||
+    message.includes("rate limit") ||
+    message.includes("access forbidden")
+  );
+}
+
+function randomIndexExcluding(length: number, excludeSet: Set<number>): number {
+  const allowed = Array.from({ length }, (_, i) => i).filter(
+    (i) => !excludeSet.has(i)
+  );
+  if (allowed.length === 0) {
+    return Math.floor(Math.random() * length);
+  }
+  return allowed[Math.floor(Math.random() * allowed.length)]!;
+}
+
+export class RPCManager {
+  private readonly rpcUrls: string[];
+  private readonly maxRetries: number;
+  private readonly retryDelay: number;
+  private readonly connectionCache: Map<string, Connection> = new Map();
 
   constructor(options: RPCManagerOptions) {
-    if (!options.rpcUrls || options.rpcUrls.length === 0) {
+    if (!options.rpcUrls?.length) {
       throw new Error("At least one RPC URL is required");
     }
-
-    this.rpcUrls = [...options.rpcUrls]; // Create a copy
-    this.maxRetries = options.maxRetries ?? 3;
-    this.retryDelay = options.retryDelay ?? 3000; // 3 seconds default (increased from 1s)
+    this.rpcUrls = [...options.rpcUrls];
+    this.maxRetries = options.maxRetries ?? MAX_RETRIES;
+    this.retryDelay = options.retryDelay ?? RETRY_DELAY_MS;
   }
 
-  /**
-   * Get the current RPC URL
-   */
-  getCurrentRpcUrl(): string {
-    return this.rpcUrls[this.currentIndex];
-  }
-
-  /**
-   * Get a Connection instance for the current RPC
-   */
-  getConnection(): Connection {
-    const url = this.getCurrentRpcUrl();
-
-    // Cache connections to avoid creating new ones
+  getConnection(url: string): Connection {
     if (!this.connectionCache.has(url)) {
       this.connectionCache.set(url, new Connection(url, "confirmed"));
     }
-
     return this.connectionCache.get(url)!;
   }
 
-  /**
-   * Rotate to the next RPC endpoint
-   */
-  rotateRpc(): void {
-    this.currentIndex = (this.currentIndex + 1) % this.rpcUrls.length;
+  getCurrentRpcUrl(): string {
+    return this.rpcUrls[0]!;
+  }
+
+  getRpcUrls(): string[] {
+    return [...this.rpcUrls];
   }
 
   /**
-   * Execute a function with automatic RPC rotation on failure
+   * Execute with random RPC selection. On failure, retry with a new random RPC
+   * up to maxRetries (default 3).
    */
   async executeWithRetry<T>(
     fn: (connection: Connection) => Promise<T>,
     customRetries?: number
   ): Promise<T> {
     const maxAttempts = customRetries ?? this.maxRetries;
+    const triedIndices = new Set<number>();
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const index = randomIndexExcluding(this.rpcUrls.length, triedIndices);
+      triedIndices.add(index);
+      const url = this.rpcUrls[index]!;
+      const connection = this.getConnection(url);
+
       try {
-        const connection = this.getConnection();
         return await fn(connection);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
-        // Check if it's a network/RPC error (not a logic error)
-        const isNetworkError = this.isNetworkError(lastError);
+        const isRateLimit = isRateLimitError(lastError);
+        const delay =
+          (isRateLimit ? this.retryDelay * 3 : this.retryDelay) *
+            Math.pow(2, attempt) +
+          Math.random() * 1000;
 
-        if (isNetworkError && attempt < maxAttempts - 1) {
-          // Rotate to next RPC and retry
-          this.rotateRpc();
-
-          // Use longer delay for rate limit errors
-          const isRateLimit = this.isRateLimitError(lastError);
-          const baseDelay = isRateLimit ? this.retryDelay * 3 : this.retryDelay;
-
-          // Exponential backoff with jitter to prevent thundering herd
-          const jitter = Math.random() * 1000; // 0-1 second jitter
-          const delay = baseDelay * Math.pow(2, attempt) + jitter;
-
+        if (attempt < maxAttempts - 1) {
           console.warn(
-            `[RPCManager] ${
-              isRateLimit ? "Rate limit" : "RPC error"
-            } on attempt ${attempt + 1}, ` +
-              `waiting ${Math.round(
-                delay / 1000
-              )}s before rotating to ${this.getCurrentRpcUrl()}`
+            `[RPCManager] Attempt ${
+              attempt + 1
+            } failed on ${url}, retrying in ${Math.round(
+              delay / 1000
+            )}s (next: new random RPC)`
           );
-
-          await new Promise((resolve) => setTimeout(resolve, delay));
+          await new Promise((r) => setTimeout(r, delay));
         } else {
-          // Not a network error or max retries reached
           throw lastError;
         }
       }
     }
 
-    // Should never reach here, but TypeScript needs it
-    throw lastError || new Error("Failed after all retries");
+    throw lastError ?? new Error("Failed after all retries");
   }
 
-  /**
-   * Check if an error is a network/RPC error that warrants retry
-   */
-  private isNetworkError(error: Error): boolean {
-    const message = error.message.toLowerCase();
-    const networkErrorPatterns = [
-      "network",
-      "timeout",
-      "econnrefused",
-      "enotfound",
-      "fetch failed",
-      "rate limit",
-      "access forbidden",
-      "403",
-      "429",
-      "503",
-      "502",
-      "500",
-      "connection",
-      "failed to get balance",
-    ];
-
-    return networkErrorPatterns.some((pattern) => message.includes(pattern));
-  }
-
-  /**
-   * Check if error is a rate limit error (needs longer delay)
-   */
-  private isRateLimitError(error: Error): boolean {
-    const message = error.message.toLowerCase();
-    return (
-      message.includes("429") ||
-      message.includes("403") ||
-      message.includes("rate limit") ||
-      message.includes("access forbidden")
-    );
-  }
-
-  /**
-   * Test connection to current RPC
-   */
   async testConnection(): Promise<boolean> {
     try {
-      const connection = this.getConnection();
-      await connection.getSlot();
+      await this.executeWithRetry((c) => c.getSlot(), 1);
       return true;
-    } catch (error) {
-      console.error("[RPCManager] Connection test failed:", error);
+    } catch {
       return false;
     }
   }
 
-  /**
-   * Get all RPC URLs
-   */
-  getRpcUrls(): string[] {
-    return [...this.rpcUrls];
-  }
-
-  /**
-   * Clear connection cache
-   */
   clearCache(): void {
     this.connectionCache.clear();
   }
 }
 
-/**
- * Default RPC URLs as fallback
- */
-const DEFAULT_RPC_URLS = ["https://api.mainnet-beta.solana.com"];
+const DEFAULT_SOLANA_RPCS = ["https://api.mainnet-beta.solana.com"];
 
-/**
- * Create an RPC manager from environment variables
- */
-export function createRPCManager(): RPCManager {
-  let rpcUrls: string[] = [];
-
+function parseEnvRpcs(envKey: string): string[] {
   try {
-    const rpcUrlsEnv = import.meta.env.VITE_SOLANA_RPCS;
-
-    if (rpcUrlsEnv) {
-      // Parse comma-separated URLs
-      rpcUrls = rpcUrlsEnv
+    const raw = import.meta.env[envKey];
+    if (raw && typeof raw === "string") {
+      return raw
         .split(",")
-        .map((url: string) => url.trim())
-        .filter((url: string) => url.length > 0);
+        .map((u: string) => u.trim())
+        .filter((u: string) => u.length > 0);
     }
-  } catch (error) {
-    console.warn(
-      "[RPCManager] Error reading env variable, using defaults:",
-      error
-    );
+  } catch {
+    // ignore
   }
-
-  // Use default if no URLs found
-  if (rpcUrls.length === 0) {
-    console.warn("[RPCManager] No RPC URLs in env, using defaults");
-    rpcUrls = DEFAULT_RPC_URLS;
-  }
-
-  return new RPCManager({ rpcUrls });
+  return [];
 }
 
-export { RPCManager };
-export type { RPCManagerOptions };
+export function createRPCManager(): RPCManager {
+  let urls = parseEnvRpcs("VITE_SOLANA_RPCS");
+  if (urls.length === 0) {
+    urls = DEFAULT_SOLANA_RPCS;
+  }
+  return new RPCManager({ rpcUrls: urls });
+}

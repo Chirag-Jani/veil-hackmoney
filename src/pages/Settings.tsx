@@ -1,37 +1,53 @@
-import bs58 from 'bs58';
-import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, Archive, ArrowLeft, Check, Copy, Key, Lock, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { getKeypairForIndex } from '../utils/keyManager';
-import type { BurnerWallet } from '../utils/storage';
-import { getAllBurnerWallets, getArchivedBurnerWallets } from '../utils/storage';
-import { getPrivacyCashMode, setPrivacyCashMode } from '../utils/settings';
-import { lockWallet } from '../utils/walletLock';
+import bs58 from "bs58";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  Archive,
+  ArrowLeft,
+  Check,
+  Copy,
+  Key,
+  Lock,
+  X,
+} from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  getEthereumWalletForIndex,
+  getKeypairForIndex,
+} from "../utils/keyManager";
+import { getPrivacyCashMode, setPrivacyCashMode } from "../utils/settings";
+import type { BurnerWallet } from "../utils/storage";
+import {
+  getAllBurnerWallets,
+  getArchivedBurnerWallets,
+} from "../utils/storage";
+import { lockWallet } from "../utils/walletLock";
 
 const Settings = () => {
   const navigate = useNavigate();
   const [showExportModal, setShowExportModal] = useState(false);
-  const [password, setPassword] = useState('');
-  const [passwordError, setPasswordError] = useState('');
+  const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [privateKey, setPrivateKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [activeWallet, setActiveWallet] = useState<BurnerWallet | null>(null);
   const [archivedWallets, setArchivedWallets] = useState<BurnerWallet[]>([]);
-  const [selectedWalletForExport, setSelectedWalletForExport] = useState<BurnerWallet | null>(null);
+  const [selectedWalletForExport, setSelectedWalletForExport] =
+    useState<BurnerWallet | null>(null);
   const [privacyCashMode, setPrivacyCashModeState] = useState<boolean>(true);
 
   // Load active wallet, archived wallets count, and settings on mount
   useEffect(() => {
     const loadData = async () => {
       const wallets = await getAllBurnerWallets();
-      const active = wallets.find(w => w.isActive) || wallets[0] || null;
+      const active = wallets.find((w) => w.isActive) || wallets[0] || null;
       setActiveWallet(active);
-      
+
       const archived = await getArchivedBurnerWallets();
       setArchivedWallets(archived);
-      
+
       const privacyCashEnabled = await getPrivacyCashMode();
       setPrivacyCashModeState(privacyCashEnabled);
     };
@@ -47,58 +63,67 @@ const Settings = () => {
   const handleLockWallet = async () => {
     try {
       await lockWallet();
-      navigate('/home');
+      navigate("/home");
     } catch (error) {
-      console.error('[Veil] Error locking wallet:', error);
+      console.error("[Veil] Error locking wallet:", error);
     }
   };
 
   const handleExportPrivateKey = async (wallet?: BurnerWallet) => {
     const targetWallet = wallet || activeWallet;
-    
+
     if (!password) {
-      setPasswordError('Please enter your password');
+      setPasswordError("Please enter your password");
       return;
     }
 
     setIsVerifying(true);
-    setPasswordError('');
+    setPasswordError("");
 
     try {
       if (!targetWallet) {
-        setPasswordError('No wallet found');
-        setPassword('');
+        setPasswordError("No wallet found");
+        setPassword("");
         return;
       }
-      
-      // Get keypair for the target wallet (using its index)
-      // This handles imported wallets correctly (index 0 uses imported keypair)
-      const walletKeypair = await getKeypairForIndex(password, targetWallet.index);
-      
-      // Verify the derived public key matches the stored address
-      const derivedPublicKey = walletKeypair.publicKey.toBase58();
-      if (derivedPublicKey !== targetWallet.fullAddress) {
-        console.error('[Veil] Public key mismatch:', {
-          derived: derivedPublicKey,
-          stored: targetWallet.fullAddress,
-          index: targetWallet.index
-        });
-        setPasswordError('Key derivation mismatch. Please try again.');
-        setPassword('');
-        return;
+
+      if (targetWallet.network === "ethereum") {
+        const { address, privateKey: ethPrivateKey } =
+          await getEthereumWalletForIndex(password, targetWallet.index);
+        if (address.toLowerCase() !== targetWallet.fullAddress.toLowerCase()) {
+          console.error("[Veil] Ethereum address mismatch:", {
+            derived: address,
+            stored: targetWallet.fullAddress,
+            index: targetWallet.index,
+          });
+          setPasswordError("Key derivation mismatch. Please try again.");
+          setPassword("");
+          return;
+        }
+        setPrivateKey(ethPrivateKey);
+      } else {
+        const walletKeypair = await getKeypairForIndex(
+          password,
+          targetWallet.index
+        );
+        const derivedPublicKey = walletKeypair.publicKey.toBase58();
+        if (derivedPublicKey !== targetWallet.fullAddress) {
+          console.error("[Veil] Public key mismatch:", {
+            derived: derivedPublicKey,
+            stored: targetWallet.fullAddress,
+            index: targetWallet.index,
+          });
+          setPasswordError("Key derivation mismatch. Please try again.");
+          setPassword("");
+          return;
+        }
+        const secretKeyBytes = new Uint8Array(walletKeypair.secretKey);
+        setPrivateKey(bs58.encode(secretKeyBytes));
       }
-      
-      // Export full secretKey in Base58 format (Phantom import format)
-      // Phantom expects the full 64-byte secretKey in Base58
-      // secretKey format: [32 bytes private key][32 bytes public key]
-      const secretKeyBytes = new Uint8Array(walletKeypair.secretKey);
-      const secretKeyBase58 = bs58.encode(secretKeyBytes);
-      
-      setPrivateKey(secretKeyBase58);
-      setPassword('');
+      setPassword("");
     } catch {
-      setPasswordError('Incorrect password. Please try again.');
-      setPassword('');
+      setPasswordError("Incorrect password. Please try again.");
+      setPassword("");
     } finally {
       setIsVerifying(false);
     }
@@ -115,19 +140,18 @@ const Settings = () => {
   const handleCloseModal = () => {
     setShowExportModal(false);
     setSelectedWalletForExport(null);
-    setPassword('');
-    setPasswordError('');
+    setPassword("");
+    setPasswordError("");
     setPrivateKey(null);
     setCopied(false);
   };
-
 
   return (
     <div className="h-full w-full bg-black text-white relative flex flex-col font-sans overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10">
-        <button 
-          onClick={() => navigate(-1)} 
+        <button
+          onClick={() => navigate(-1)}
           className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
         >
           <ArrowLeft className="w-5 h-5 text-gray-400" />
@@ -146,23 +170,25 @@ const Settings = () => {
                   <Key className="w-5 h-5 text-blue-400" />
                 </div>
                 <div className="text-left">
-                  <p className="font-semibold text-sm">Private Transfers (Optional)</p>
+                  <p className="font-semibold text-sm">
+                    Private Transfers (Optional)
+                  </p>
                   <p className="text-xs text-gray-500">
-                    {privacyCashMode 
-                      ? 'Unlinkable transfers enabled'
-                      : 'Normal wallet mode'}
+                    {privacyCashMode
+                      ? "Unlinkable transfers enabled"
+                      : "Normal wallet mode"}
                   </p>
                 </div>
               </div>
               <button
                 onClick={handleTogglePrivacyCashMode}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  privacyCashMode ? 'bg-blue-600' : 'bg-gray-600'
+                  privacyCashMode ? "bg-blue-600" : "bg-gray-600"
                 }`}
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    privacyCashMode ? 'translate-x-6' : 'translate-x-1'
+                    privacyCashMode ? "translate-x-6" : "translate-x-1"
                   }`}
                 />
               </button>
@@ -183,7 +209,9 @@ const Settings = () => {
               </div>
               <div className="text-left">
                 <p className="font-semibold text-sm">Export Private Key</p>
-                <p className="text-xs text-gray-500">Reveal your active wallet private key</p>
+                <p className="text-xs text-gray-500">
+                  Reveal your active wallet private key
+                </p>
               </div>
             </div>
             <div className="text-gray-600 group-hover:text-gray-400 transition-colors">
@@ -202,7 +230,9 @@ const Settings = () => {
               </div>
               <div className="text-left">
                 <p className="font-semibold text-sm">Lock Wallet</p>
-                <p className="text-xs text-gray-500">Lock your wallet and require password to unlock</p>
+                <p className="text-xs text-gray-500">
+                  Lock your wallet and require password to unlock
+                </p>
               </div>
             </div>
             <div className="text-gray-600 group-hover:text-gray-400 transition-colors">
@@ -212,7 +242,7 @@ const Settings = () => {
 
           {/* Archived Wallets */}
           <button
-            onClick={() => navigate('/archived')}
+            onClick={() => navigate("/archived")}
             className="w-full p-4 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-between transition-all group"
           >
             <div className="flex items-center gap-3">
@@ -222,7 +252,8 @@ const Settings = () => {
               <div className="text-left">
                 <p className="font-semibold text-sm">Archived Wallets</p>
                 <p className="text-xs text-gray-500">
-                  {archivedWallets.length} {archivedWallets.length === 1 ? 'wallet' : 'wallets'} archived
+                  {archivedWallets.length}{" "}
+                  {archivedWallets.length === 1 ? "wallet" : "wallets"} archived
                 </p>
               </div>
             </div>
@@ -245,10 +276,10 @@ const Settings = () => {
               className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
             />
             <motion.div
-              initial={{ y: '100%' }}
+              initial={{ y: "100%" }}
               animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
               className="fixed bottom-0 left-0 right-0 bg-gray-900 rounded-t-2xl z-50 border-t border-white/10 max-h-[90vh] overflow-y-auto"
             >
               <div className="flex justify-center pt-3 pb-2">
@@ -280,9 +311,13 @@ const Settings = () => {
                       <div className="flex items-start gap-3">
                         <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
                         <div className="flex-1">
-                          <p className="text-sm font-semibold text-red-400 mb-1">Security Warning</p>
+                          <p className="text-sm font-semibold text-red-400 mb-1">
+                            Security Warning
+                          </p>
                           <p className="text-xs text-red-300/80 leading-relaxed">
-                            Never share your private key with anyone. Anyone with access to your private key can control your wallet and steal your funds.
+                            Never share your private key with anyone. Anyone
+                            with access to your private key can control your
+                            wallet and steal your funds.
                           </p>
                         </div>
                       </div>
@@ -298,10 +333,10 @@ const Settings = () => {
                         value={password}
                         onChange={(e) => {
                           setPassword(e.target.value);
-                          setPasswordError('');
+                          setPasswordError("");
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !isVerifying) {
+                          if (e.key === "Enter" && !isVerifying) {
                             handleExportPrivateKey();
                           }
                         }}
@@ -310,21 +345,27 @@ const Settings = () => {
                         autoFocus
                       />
                       {passwordError && (
-                        <p className="text-xs text-red-400 mt-2">{passwordError}</p>
+                        <p className="text-xs text-red-400 mt-2">
+                          {passwordError}
+                        </p>
                       )}
                     </div>
 
                     {/* Verify Button */}
                     <button
-                      onClick={() => handleExportPrivateKey(selectedWalletForExport || undefined)}
+                      onClick={() =>
+                        handleExportPrivateKey(
+                          selectedWalletForExport || undefined
+                        )
+                      }
                       disabled={!password || isVerifying}
                       className={`w-full py-3.5 px-4 font-semibold rounded-xl transition-all ${
                         password && !isVerifying
-                          ? 'bg-gradient-to-r from-red-600 to-red-500 text-white hover:from-red-500 hover:to-red-400 shadow-lg shadow-red-500/20'
-                          : 'bg-white/10 text-gray-500 cursor-not-allowed'
+                          ? "bg-gradient-to-r from-red-600 to-red-500 text-white hover:from-red-500 hover:to-red-400 shadow-lg shadow-red-500/20"
+                          : "bg-white/10 text-gray-500 cursor-not-allowed"
                       }`}
                     >
-                      {isVerifying ? 'Verifying...' : 'Continue'}
+                      {isVerifying ? "Verifying..." : "Continue"}
                     </button>
                   </>
                 ) : (
@@ -349,12 +390,16 @@ const Settings = () => {
                       {copied ? (
                         <>
                           <Check className="w-4 h-4 text-green-400" />
-                          <span className="text-sm font-medium text-green-400">Copied!</span>
+                          <span className="text-sm font-medium text-green-400">
+                            Copied!
+                          </span>
                         </>
                       ) : (
                         <>
                           <Copy className="w-4 h-4 text-gray-400" />
-                          <span className="text-sm font-medium">Copy Private Key</span>
+                          <span className="text-sm font-medium">
+                            Copy Private Key
+                          </span>
                         </>
                       )}
                     </button>
