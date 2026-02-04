@@ -1,42 +1,42 @@
-import { useState } from "react";
-import { getDecryptedSeed } from "../utils/keyManager";
-import { unlockWallet } from "../utils/walletLock";
+import { useState } from 'react';
+import { getDecryptedSeed } from '../utils/keyManager';
+import { unlockWallet } from '../utils/walletLock';
 
 interface UnlockWalletProps {
   onUnlock: (password: string) => void;
 }
 
 const UnlockWallet = ({ onUnlock }: UnlockWalletProps) => {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
   const [isUnlocking, setIsUnlocking] = useState(false);
 
   const handleUnlock = async () => {
     if (!password) {
-      setError("Please enter your password");
+      setError('Please enter your password');
       return;
     }
 
     setIsUnlocking(true);
-    setError("");
-
+    setError('');
+    
     try {
       // Add a small delay to show loading state and make unlock feel more deliberate
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
       // Try to decrypt the seed to verify password
       await getDecryptedSeed(password);
       await unlockWallet();
       onUnlock(password);
     } catch (err) {
-      console.error("[Veil] Unlock error:", err);
-      setError("Incorrect password. Please try again.");
+      console.error('[Veil] Unlock error:', err);
+      setError('Incorrect password. Please try again.');
       setIsUnlocking(false);
     }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
+    if (e.key === 'Enter') {
       handleUnlock();
     }
   };
@@ -50,11 +50,7 @@ const UnlockWallet = ({ onUnlock }: UnlockWalletProps) => {
       <div className="z-10 w-full max-w-xs space-y-6">
         <div className="text-center space-y-4">
           <div className="mx-auto w-32 h-32 flex items-center justify-center overflow-hidden p-3">
-            <img
-              src="/veil_shield.png"
-              alt="Veil Logo"
-              className="w-full h-full object-contain"
-            />
+            <img src="/veil_shield.png" alt="Veil Logo" className="w-full h-full object-contain" />
           </div>
           <div>
             <p className="text-gray-400 mt-2 text-sm">
@@ -70,14 +66,16 @@ const UnlockWallet = ({ onUnlock }: UnlockWalletProps) => {
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
-                setError("");
+                setError('');
               }}
               onKeyPress={handleKeyPress}
               placeholder="Enter password"
               className="w-full py-3.5 px-4 bg-white/5 border border-white/10 rounded-xl text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-white/20 transition-colors"
               autoFocus
             />
-            {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
+            {error && (
+              <p className="text-red-400 text-xs mt-2">{error}</p>
+            )}
           </div>
 
           <button
@@ -85,11 +83,11 @@ const UnlockWallet = ({ onUnlock }: UnlockWalletProps) => {
             disabled={isUnlocking || !password}
             className={`w-full py-3.5 px-4 font-semibold rounded-xl transition-all ${
               password && !isUnlocking
-                ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400 shadow-lg shadow-blue-500/20"
-                : "bg-white/10 text-gray-500 cursor-not-allowed"
+                ? 'bg-gradient-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400 shadow-lg shadow-blue-500/20'
+                : 'bg-white/10 text-gray-500 cursor-not-allowed'
             }`}
           >
-            {isUnlocking ? "Unlocking..." : "Unlock Wallet"}
+            {isUnlocking ? 'Unlocking...' : 'Unlock Wallet'}
           </button>
         </div>
       </div>

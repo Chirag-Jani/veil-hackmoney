@@ -92,13 +92,10 @@ const SendPrivatelyModal = ({
 
     try {
       const finalRecipient = useDefaultRecipient ? undefined : recipient;
-      console.log("[Veil Modal] Calling onSendPrivately with:", {
-        sendAmount,
-        finalRecipient,
-      });
-
+      console.log("[Veil Modal] Calling onSendPrivately with:", { sendAmount, finalRecipient });
+      
       await onSendPrivately(sendAmount, finalRecipient);
-
+      
       console.log("[Veil Modal] Send privately succeeded!");
       // Success - close modal after a brief delay
       setTimeout(() => {
@@ -119,6 +116,7 @@ const SendPrivatelyModal = ({
     sendAmount <= availableBalance &&
     sendAmount >= 0.01 &&
     (useDefaultRecipient || (recipient && recipient.length >= 32));
+
 
   return (
     <AnimatePresence>
@@ -150,12 +148,8 @@ const SendPrivatelyModal = ({
                     <Shield className="w-5 h-5 text-purple-400" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-white">
-                      Send Privately
-                    </h3>
-                    <p className="text-xs text-gray-500">
-                      Deposit & withdraw in one transaction
-                    </p>
+                    <h3 className="text-lg font-bold text-white">Send Privately</h3>
+                    <p className="text-xs text-gray-500">Deposit & withdraw in one transaction</p>
                   </div>
                 </div>
                 <button
@@ -170,9 +164,7 @@ const SendPrivatelyModal = ({
               {/* Available Balance */}
               <div className="mb-4 p-3 rounded-lg bg-white/5 border border-white/10">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    Available Balance
-                  </span>
+                  <span className="text-xs text-gray-500">Available Balance</span>
                   <span className="text-sm font-semibold text-white">
                     {availableBalance.toFixed(4)} SOL
                   </span>
@@ -301,9 +293,8 @@ const SendPrivatelyModal = ({
                       How it works
                     </p>
                     <p className="text-xs text-purple-400/80">
-                      Your funds move through a privacy pool and are withdrawn
-                      to the recipient, making the transaction unlinkable
-                      on-chain. This typically takes 60-90 seconds.
+                      Your funds move through a privacy pool and are withdrawn to the recipient, 
+                      making the transaction unlinkable on-chain. This typically takes 60-90 seconds.
                     </p>
                   </div>
                 </div>
@@ -329,9 +320,7 @@ const SendPrivatelyModal = ({
                     <>
                       <Shield className="w-4 h-4" />
                       <span>
-                        Send{" "}
-                        {sendAmount > 0 ? `${sendAmount.toFixed(4)} SOL` : ""}{" "}
-                        Privately
+                        Send {sendAmount > 0 ? `${sendAmount.toFixed(4)} SOL` : ""} Privately
                       </span>
                     </>
                   )}

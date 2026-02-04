@@ -3,24 +3,11 @@
  * retry with a new RPC on failure up to 3 times.
  */
 
+import { ETHEREUM_RPCS } from "../config/rpcs";
+
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 3000;
-const DEFAULT_ETH_RPCS = ["https://eth.llamarpc.com"];
-
-function parseEnvRpcs(envKey: string): string[] {
-  try {
-    const raw = import.meta.env[envKey];
-    if (raw && typeof raw === "string") {
-      return raw
-        .split(",")
-        .map((u: string) => u.trim())
-        .filter((u: string) => u.length > 0);
-    }
-  } catch {
-    // ignore
-  }
-  return [];
-}
+const DEFAULT_ETH_RPCS = [...ETHEREUM_RPCS];
 
 function randomIndexExcluding(length: number, exclude: Set<number>): number {
   const allowed = Array.from({ length }, (_, i) => i).filter(
@@ -95,34 +82,17 @@ let ethManagerInstance: EthRPCManager | null = null;
 
 export function getEthRPCManager(): EthRPCManager {
   if (!ethManagerInstance) {
-    let urls = parseEnvRpcs("VITE_ETHEREUM_RPCS");
-    if (urls.length === 0) {
-      const single = import.meta.env.VITE_ETHEREUM_RPC;
-      if (single && typeof single === "string" && single.trim()) {
-        urls = [single.trim()];
-      } else {
-        urls = DEFAULT_ETH_RPCS;
-      }
-    }
+    const urls = DEFAULT_ETH_RPCS;
     ethManagerInstance = new EthRPCManager({ rpcUrls: urls });
   }
   return ethManagerInstance;
 }
 
 export function createEthRPCManager(): EthRPCManager {
-  let urls = parseEnvRpcs("VITE_ETHEREUM_RPCS");
-  if (urls.length === 0) {
-    const single = import.meta.env.VITE_ETHEREUM_RPC;
-    if (single && typeof single === "string" && single.trim()) {
-      urls = [single.trim()];
-    } else {
-      urls = DEFAULT_ETH_RPCS;
-    }
-  }
-  return new EthRPCManager({ rpcUrls: urls });
+  return new EthRPCManager({ rpcUrls: DEFAULT_ETH_RPCS });
 }
 
-/** Single URL for legacy callers. Prefer executeWithRetry for operations. */
+/** Single URL for legacy callers (e.g. JsonRpcProvider). Prefer executeWithRetry for operations. */
 export function getEthRpcUrl(): string {
   return getEthRPCManager().getRpcUrls()[0] ?? DEFAULT_ETH_RPCS[0]!;
 }

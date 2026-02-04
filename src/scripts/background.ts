@@ -20,6 +20,7 @@ import {
   removeSignApproval,
   removePendingSignRequest,
   storeSignApproval,
+  getActiveBurnerWallet as getActiveBurnerWalletForNetwork,
   type ConnectedSite,
   type PendingConnectionRequest,
   type PendingSignRequest,
@@ -213,6 +214,175 @@ onMessageType("providerRequest", async (message, sender) => {
 
     // Check if wallet is unlocked
     let isUnlocked = await checkWalletUnlocked();
+
+    const isEthereumMethod =
+      method === "net_version" ||
+      (typeof method === "string" &&
+        (method.startsWith("eth_") || method.startsWith("wallet_")));
+
+    const getEthAddressForConnectedSite = async (): Promise<string | null> => {
+      const siteConnected = await isSiteConnected(origin);
+      if (!siteConnected) return null;
+      const active = await getActiveBurnerWalletForNetwork("ethereum");
+      return active?.fullAddress ?? active?.address ?? null;
+    };
+
+    // Ethereum provider (EIP-1193) methods
+    if (isEthereumMethod) {
+      // Public methods that should not require a connection
+      if (method === "eth_chainId") {
+        return { success: true, result: "0x1" } as import("../types").ProviderResponse;
+      }
+      if (method === "net_version") {
+        return { success: true, result: "1" } as import("../types").ProviderResponse;
+      }
+
+      // Methods that expose accounts
+      if (method === "eth_accounts") {
+        const addr = await getEthAddressForConnectedSite();
+        return {
+          success: true,
+          result: addr ? [addr] : [],
+        } as import("../types").ProviderResponse;
+      }
+
+      if (method === "eth_coinbase") {
+        const addr = await getEthAddressForConnectedSite();
+        return {
+          success: true,
+          result: addr,
+        } as import("../types").ProviderResponse;
+      }
+
+      // Connection / permissioning (requires unlock and user approval)
+      if (method === "eth_requestAccounts" || method === "wallet_requestPermissions") {
+        // If locked, open popup and wait for unlock
+        if (!isUnlocked) {
+          try {
+            await openExtensionPopup();
+            isUnlocked = await waitForUnlock(60000);
+
+            if (!isUnlocked) {
+              return {
+                success: false,
+                error: { code: -32002, message: "Wallet unlock timeout." },
+              } as import("../types").ProviderResponse;
+            }
+          } catch (error) {
+            return {
+              success: false,
+              error: {
+                code: -32002,
+                message: `Failed to open wallet: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              },
+            } as import("../types").ProviderResponse;
+          }
+        }
+
+        // If site already connected, return accounts/permissions
+        const alreadyConnected = await isSiteConnected(origin);
+        if (alreadyConnected) {
+          const activeWallet = await getActiveBurnerWalletForNetwork("ethereum");
+          const address = activeWallet?.fullAddress ?? activeWallet?.address;
+          if (!address) {
+            return {
+              success: false,
+              error: { code: -32000, message: "No active Ethereum wallet found." },
+            } as import("../types").ProviderResponse;
+          }
+          if (method === "wallet_requestPermissions") {
+            return {
+              success: true,
+              result: [{ parentCapability: "eth_accounts" }],
+            } as import("../types").ProviderResponse;
+          }
+          return {
+            success: true,
+            result: [address],
+          } as import("../types").ProviderResponse;
+        }
+
+        // Create pending connection request
+        const requestId = `${Date.now()}-${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+        const pendingRequest: PendingConnectionRequest = {
+          id: requestId,
+          origin,
+          requestedAt: Date.now(),
+        };
+
+        await storePendingConnection(pendingRequest);
+
+        // Open popup to show connection approval
+        try {
+          await openExtensionPopup();
+        } catch {
+          // Popup might already be open
+        }
+
+        // Wait for user approval
+        console.log("[Background] Waiting for connection approval...");
+        const approval = await waitForConnectionApproval(requestId, 60000);
+        console.log("[Background] Approval result:", approval);
+
+        if (!approval.approved) {
+          return {
+            success: false,
+            error: { code: 4001, message: "User rejected the request." },
+          } as import("../types").ProviderResponse;
+        }
+
+        // Store connected site
+        const activeWallet = await getActiveBurnerWalletForNetwork("ethereum");
+        const address = activeWallet?.fullAddress ?? activeWallet?.address;
+        if (!address) {
+          return {
+            success: false,
+            error: { code: -32000, message: "No active Ethereum wallet found." },
+          } as import("../types").ProviderResponse;
+        }
+
+        const connectedSite: ConnectedSite = {
+          id: Date.now(),
+          domain: origin,
+          favicon: "",
+          connected: true,
+          burnerIndex: activeWallet.index,
+          connectedAt: Date.now(),
+        };
+
+        await storeConnectedSite(connectedSite);
+
+        if (method === "wallet_requestPermissions") {
+          return {
+            success: true,
+            result: [{ parentCapability: "eth_accounts" }],
+          } as import("../types").ProviderResponse;
+        }
+
+        return {
+          success: true,
+          result: [address],
+        } as import("../types").ProviderResponse;
+      }
+
+      if (method === "wallet_getPermissions") {
+        const addr = await getEthAddressForConnectedSite();
+        return {
+          success: true,
+          result: addr ? [{ parentCapability: "eth_accounts" }] : [],
+        } as import("../types").ProviderResponse;
+      }
+
+      // Not implemented yet
+      return {
+        success: false,
+        error: { code: -32601, message: `Method not found: ${method}` },
+      } as import("../types").ProviderResponse;
+    }
     
     // Handle connect request
     if (method === 'connect') {

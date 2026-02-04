@@ -390,6 +390,7 @@ export async function getNextBurnerIndex(
   if (typeof currentIndex === "number" && Number.isInteger(currentIndex)) {
     return currentIndex;
   }
+  // Legacy: old key without network suffix = Solana
   if (network === "solana") {
     const legacy = await chrome.storage.local.get(STORAGE_KEYS.BURNER_INDEX);
     return (legacy[STORAGE_KEYS.BURNER_INDEX] as number) || 0;

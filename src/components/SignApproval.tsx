@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { AlertTriangle, Check, MessageSquare, Shield, X } from "lucide-react";
+import { MessageSquare, Check, X, Shield, AlertTriangle } from "lucide-react";
 import type { PendingSignRequest } from "../utils/storage";
 
 interface SignApprovalProps {
@@ -34,12 +34,12 @@ const SignApproval = ({
         const decoder = new TextDecoder();
         const text = decoder.decode(new Uint8Array(request.data.message));
         // Show first 50 chars
-        return text.length > 50 ? text.slice(0, 50) + "..." : text;
+        return text.length > 50 ? text.slice(0, 50) + '...' : text;
       } catch {
         return `${request.data.message.length} bytes`;
       }
     }
-    return "Message data";
+    return 'Message data';
   };
 
   return (
@@ -65,7 +65,9 @@ const SignApproval = ({
               <h2 className="text-sm font-semibold text-white truncate">
                 Sign Message
               </h2>
-              <p className="text-[10px] text-gray-400 truncate">{domain}</p>
+              <p className="text-[10px] text-gray-400 truncate">
+                {domain}
+              </p>
             </div>
           </div>
         </div>
@@ -77,12 +79,8 @@ const SignApproval = ({
             <div className="flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-gray-400 shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs text-white font-medium truncate">
-                  {domain}
-                </p>
-                <p className="text-[10px] text-gray-500 truncate">
-                  {request.origin}
-                </p>
+                <p className="text-xs text-white font-medium truncate">{domain}</p>
+                <p className="text-[10px] text-gray-500 truncate">{request.origin}</p>
               </div>
             </div>
           </div>
@@ -92,7 +90,9 @@ const SignApproval = ({
             <div className="flex items-start gap-2">
               <MessageSquare className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-gray-400 mb-0.5">Message</p>
+                <p className="text-[10px] text-gray-400 mb-0.5">
+                  Message
+                </p>
                 <p className="text-xs text-white font-mono break-all">
                   {getMessagePreview()}
                 </p>
@@ -122,8 +122,7 @@ const SignApproval = ({
           <div className="flex items-start gap-1.5 text-[10px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-2">
             <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
             <p className="leading-relaxed">
-              Only sign messages from sites you trust. Signing does not grant
-              access to your funds.
+              Only sign messages from sites you trust. Signing does not grant access to your funds.
             </p>
           </div>
         </div>

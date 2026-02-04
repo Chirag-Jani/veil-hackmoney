@@ -217,7 +217,8 @@ const Onboarding = () => {
                   Privacy by default. Own your on-chain identity.
                 </p>
                 <p className="text-gray-600 mt-2 text-xs">
-                  Site-bound addresses keep you from getting exposed.
+                  Private transfers, multi-chain swaps. Site-bound burner
+                  wallets keep you from getting exposed.
                 </p>
               </div>
 

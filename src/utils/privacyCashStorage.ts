@@ -1,12 +1,12 @@
 /**
  * Storage adapter for Privacy Cash SDK
- *
+ * 
  * The SDK uses node-localstorage which doesn't work in browser extensions.
  * This adapter wraps chrome.storage.local with a synchronous-like API that
  * the SDK expects, using a namespace prefix to isolate Privacy Cash data.
  */
 
-const STORAGE_PREFIX = "privacycash:";
+const STORAGE_PREFIX = 'privacycash:';
 
 // In-memory cache for synchronous-like access
 const cache: Map<string, string | null> = new Map();
@@ -24,7 +24,7 @@ export async function initializeStorageCache(): Promise<void> {
       }
     }
   } catch (error) {
-    console.error("[PrivacyCash] Error initializing storage cache:", error);
+    console.error('[PrivacyCash] Error initializing storage cache:', error);
   }
 }
 
@@ -61,10 +61,10 @@ class PrivacyCashStorage implements Storage {
 
   async setItem(key: string, value: string): Promise<void> {
     const storageKey = `${this.prefix}${key}`;
-
+    
     // Update cache immediately
     cache.set(key, value);
-
+    
     // Persist to chrome.storage
     try {
       await chrome.storage.local.set({ [storageKey]: value });
@@ -78,10 +78,10 @@ class PrivacyCashStorage implements Storage {
 
   async removeItem(key: string): Promise<void> {
     const storageKey = `${this.prefix}${key}`;
-
+    
     // Remove from cache
     cache.delete(key);
-
+    
     // Remove from chrome.storage
     try {
       await chrome.storage.local.remove(storageKey);
@@ -95,16 +95,16 @@ class PrivacyCashStorage implements Storage {
     // Get all Privacy Cash keys
     const allData = await chrome.storage.local.get(null);
     const keysToRemove: string[] = [];
-
+    
     for (const key of Object.keys(allData)) {
       if (key.startsWith(this.prefix)) {
         keysToRemove.push(key);
       }
     }
-
+    
     // Clear cache
     cache.clear();
-
+    
     // Remove from chrome.storage
     if (keysToRemove.length > 0) {
       await chrome.storage.local.remove(keysToRemove);
@@ -130,17 +130,15 @@ export function getPrivacyCashStorage(): Storage {
  * Pre-populate cache for a specific public key
  * Call this before SDK operations to ensure synchronous getItem() works
  */
-export async function preloadStorageForPublicKey(
-  publicKey: string
-): Promise<void> {
+export async function preloadStorageForPublicKey(publicKey: string): Promise<void> {
   const allData = await chrome.storage.local.get(null);
-
+  
   // SDK uses keys like: fetch_offset{publicKey}, encrypted_outputs{publicKey}, etc.
   const patterns = [
     `fetch_offset${publicKey}`,
     `encrypted_outputs${publicKey}`,
   ];
-
+  
   // Also check for history keys (they may have different patterns)
   for (const [key, value] of Object.entries(allData)) {
     if (key.startsWith(STORAGE_PREFIX)) {
@@ -151,7 +149,7 @@ export async function preloadStorageForPublicKey(
       }
     }
   }
-
+  
   // Explicitly load known patterns
   for (const pattern of patterns) {
     const storageKey = `${STORAGE_PREFIX}${pattern}`;

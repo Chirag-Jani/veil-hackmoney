@@ -104,6 +104,7 @@ export async function getAllBurnerWallets(
     const wallet = value as BurnerWallet;
     if (wallet.archived) continue;
 
+    // New format: veil:burner:solana:0 or veil:burner:ethereum:0
     const newMatch = key.match(/^veil:burner:(solana|ethereum):(\d+)$/);
     if (newMatch) {
       const walletNetwork = newMatch[1] as NetworkType;
@@ -112,6 +113,7 @@ export async function getAllBurnerWallets(
       continue;
     }
 
+    // Legacy format: veil:burner:0 (Solana only)
     const legacyMatch = key.match(/^veil:burner:(\d+)$/);
     if (legacyMatch) {
       if (network !== undefined && network !== "solana") continue;
@@ -121,6 +123,7 @@ export async function getAllBurnerWallets(
 
   const sorted = wallets.sort((a, b) => b.id - a.id);
 
+  // Set isActive from active index per network
   if (network !== undefined) {
     const activeIndex = await getActiveBurnerIndex(network);
     return sorted.map((w) => ({
@@ -132,6 +135,7 @@ export async function getAllBurnerWallets(
     }));
   }
 
+  // When returning all networks, set isActive per network
   const out: BurnerWallet[] = [];
   for (const w of sorted) {
     const activeIndex = await getActiveBurnerIndex(w.network);

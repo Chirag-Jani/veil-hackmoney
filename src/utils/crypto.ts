@@ -2,7 +2,7 @@
  * Cryptographic utilities for encryption/decryption using Web Crypto API
  */
 
-const ALGORITHM = "AES-GCM";
+const ALGORITHM = 'AES-GCM';
 const KEY_LENGTH = 256;
 const IV_LENGTH = 12; // 96 bits for GCM
 const SALT_LENGTH = 16;
@@ -16,24 +16,24 @@ async function deriveKeyFromPassword(
 ): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const passwordKey = await crypto.subtle.importKey(
-    "raw",
+    'raw',
     encoder.encode(password),
-    "PBKDF2",
+    'PBKDF2',
     false,
-    ["deriveBits", "deriveKey"]
+    ['deriveBits', 'deriveKey']
   );
 
   return crypto.subtle.deriveKey(
     {
-      name: "PBKDF2",
+      name: 'PBKDF2',
       salt: salt as BufferSource,
       iterations: 100000,
-      hash: "SHA-256",
+      hash: 'SHA-256',
     },
     passwordKey,
     { name: ALGORITHM, length: KEY_LENGTH },
     false,
-    ["encrypt", "decrypt"]
+    ['encrypt', 'decrypt']
   );
 }
 
@@ -79,8 +79,9 @@ export async function decrypt(
   password: string
 ): Promise<string> {
   // Convert from base64
-  const encryptedBytes = Uint8Array.from(atob(encryptedData), (c) =>
-    c.charCodeAt(0)
+  const encryptedBytes = Uint8Array.from(
+    atob(encryptedData),
+    (c) => c.charCodeAt(0)
   );
   const saltBytes = Uint8Array.from(atob(salt), (c) => c.charCodeAt(0));
   const ivBytes = Uint8Array.from(atob(iv), (c) => c.charCodeAt(0));

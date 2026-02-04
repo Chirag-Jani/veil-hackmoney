@@ -55,8 +55,7 @@ const ComingSoonModal = ({
                   {feature} is coming soon!
                 </p>
                 <p className="text-sm text-gray-400">
-                  We're working hard to bring you this feature. Stay tuned for
-                  updates.
+                  We're working hard to bring you this feature. Stay tuned for updates.
                 </p>
               </div>
 

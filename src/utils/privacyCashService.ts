@@ -103,7 +103,7 @@ class PrivacyCashService {
       console.error("[PrivacyCash] Error initializing:", error);
       console.error(
         "[PrivacyCash] Error stack:",
-        error instanceof Error ? error.stack : "No stack"
+        error instanceof Error ? error.stack : "No stack",
       );
       throw error;
     }
@@ -140,7 +140,7 @@ class PrivacyCashService {
       !this.storage
     ) {
       throw new Error(
-        "Privacy Cash service not initialized. Call initialize() first."
+        "Privacy Cash service not initialized. Call initialize() first.",
       );
     }
 
@@ -171,11 +171,7 @@ class PrivacyCashService {
             // Explicitly pass signer to ensure the correct keypair is used for balance checks and transaction signing
             const signer = keypair.publicKey;
 
-            console.log(
-              "[PrivacyCash] Calling deposit (attempt",
-              attempt,
-              ")..."
-            );
+            console.log("[PrivacyCash] Calling deposit (attempt", attempt, ")...");
 
             return await deposit({
               lightWasm,
@@ -188,7 +184,7 @@ class PrivacyCashService {
               storage,
               signer,
             });
-          }
+          },
         );
 
         console.log("[PrivacyCash] Deposit successful:", result.tx);
@@ -199,7 +195,7 @@ class PrivacyCashService {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(
           `[PrivacyCash] Deposit attempt ${attempt}/${maxRetries} failed:`,
-          lastError.message
+          lastError.message,
         );
 
         // Check if this is a blockhash expiration error
@@ -207,16 +203,14 @@ class PrivacyCashService {
         const isBlockhashExpired =
           errorMessage.includes("block height exceeded") ||
           errorMessage.includes("has expired") ||
-          (errorMessage.includes("signature") &&
-            errorMessage.includes("expired")) ||
-          (errorMessage.includes("deposit relay failed") &&
-            errorMessage.includes("expired"));
+          (errorMessage.includes("signature") && errorMessage.includes("expired")) ||
+          errorMessage.includes("deposit relay failed") && errorMessage.includes("expired");
 
         if (isBlockhashExpired && attempt < maxRetries) {
           // Wait a bit before retrying to allow network to progress
           const waitTime = attempt * 2000; // 2s, 4s, 6s
           console.log(
-            `[PrivacyCash] Blockhash expired, retrying in ${waitTime}ms...`
+            `[PrivacyCash] Blockhash expired, retrying in ${waitTime}ms...`,
           );
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           continue;
@@ -242,7 +236,7 @@ class PrivacyCashService {
    */
   async withdraw(
     lamports: number,
-    recipientAddress?: string
+    recipientAddress?: string,
   ): Promise<WithdrawResult> {
     if (
       !this.currentKeypair ||
@@ -251,7 +245,7 @@ class PrivacyCashService {
       !this.storage
     ) {
       throw new Error(
-        "Privacy Cash service not initialized. Call initialize() first."
+        "Privacy Cash service not initialized. Call initialize() first.",
       );
     }
 
@@ -300,7 +294,7 @@ class PrivacyCashService {
               encryptionService,
               keyBasePath,
             });
-          }
+          },
         );
 
         console.log("[PrivacyCash] Withdraw successful:", result);
@@ -316,7 +310,7 @@ class PrivacyCashService {
         lastError = error instanceof Error ? error : new Error(String(error));
         console.error(
           `[PrivacyCash] Withdraw attempt ${attempt}/${maxRetries} failed:`,
-          lastError.message
+          lastError.message,
         );
 
         // Check if this is a blockhash expiration error
@@ -329,7 +323,7 @@ class PrivacyCashService {
           // Wait a bit before retrying to allow network to progress
           const waitTime = attempt * 2000; // 2s, 4s, 6s
           console.log(
-            `[PrivacyCash] Blockhash expired, retrying in ${waitTime}ms...`
+            `[PrivacyCash] Blockhash expired, retrying in ${waitTime}ms...`,
           );
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           continue;
@@ -356,7 +350,7 @@ class PrivacyCashService {
    */
   async depositAndWithdraw(
     lamports: number,
-    recipientAddress?: string
+    recipientAddress?: string,
   ): Promise<DepositAndWithdrawResult> {
     if (
       !this.currentKeypair ||
@@ -365,7 +359,7 @@ class PrivacyCashService {
       !this.storage
     ) {
       throw new Error(
-        "Privacy Cash service not initialized. Call initialize() first."
+        "Privacy Cash service not initialized. Call initialize() first.",
       );
     }
 
@@ -383,7 +377,7 @@ class PrivacyCashService {
 
       // Clear cache and wait for UTXOs to appear on-chain
       await this.clearCache();
-
+      
       // Wait for UTXOs to be indexed - this can take time
       console.log("[PrivacyCash] Waiting for UTXOs to be indexed...");
       await new Promise((resolve) => setTimeout(resolve, 5000)); // Initial wait
@@ -400,30 +394,21 @@ class PrivacyCashService {
         try {
           await this.clearCache();
           const balance = await this.getPrivateBalance();
-          console.log(
-            `[PrivacyCash] Retry ${
-              retries + 1
-            }/${maxRetries}: Private balance: ${balance} SOL (expected: ${expectedBalance} SOL, min required: ${minRequiredBalance} SOL)`
-          );
-
+          console.log(`[PrivacyCash] Retry ${retries + 1}/${maxRetries}: Private balance: ${balance} SOL (expected: ${expectedBalance} SOL, min required: ${minRequiredBalance} SOL)`);
+          
           // Check if we have sufficient balance (with tolerance for fees)
           if (balance >= minRequiredBalance) {
             utxosAvailable = true;
-            console.log(
-              "[PrivacyCash] UTXOs are available, proceeding with withdraw"
-            );
+            console.log("[PrivacyCash] UTXOs are available, proceeding with withdraw");
             break;
           }
-
+          
           // Wait before next retry (longer wait for first few retries)
           const waitTime = retries < 3 ? 5000 : 3000; // 5s for first 3, then 3s
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           retries++;
         } catch (error) {
-          console.error(
-            `[PrivacyCash] Error checking balance (retry ${retries + 1}):`,
-            error
-          );
+          console.error(`[PrivacyCash] Error checking balance (retry ${retries + 1}):`, error);
           const waitTime = retries < 3 ? 5000 : 3000;
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           retries++;
@@ -437,18 +422,11 @@ class PrivacyCashService {
           await this.clearCache();
           currentBalance = await this.getPrivateBalance();
         } catch (e) {
-          console.error(
-            "[PrivacyCash] Could not fetch balance for error message:",
-            e
-          );
+          console.error("[PrivacyCash] Could not fetch balance for error message:", e);
         }
-
+        
         throw new Error(
-          `UTXOs are not yet available after deposit. Current private balance: ${currentBalance.toFixed(
-            4
-          )} SOL, Expected: ${expectedBalance.toFixed(
-            4
-          )} SOL. Please wait a moment and try withdrawing manually, or the transaction may still be processing.`
+          `UTXOs are not yet available after deposit. Current private balance: ${currentBalance.toFixed(4)} SOL, Expected: ${expectedBalance.toFixed(4)} SOL. Please wait a moment and try withdrawing manually, or the transaction may still be processing.`
         );
       }
 
@@ -480,10 +458,10 @@ class PrivacyCashService {
       !this.storage
     ) {
       console.error(
-        "[PrivacyCash] Service not initialized for getPrivateBalance"
+        "[PrivacyCash] Service not initialized for getPrivateBalance",
       );
       throw new Error(
-        "Privacy Cash service not initialized. Call initialize() first."
+        "Privacy Cash service not initialized. Call initialize() first.",
       );
     }
 
@@ -500,7 +478,7 @@ class PrivacyCashService {
           const publicKey = this.getPublicKey();
           console.log(
             "[PrivacyCash] Calling getUtxos for:",
-            publicKey.toBase58()
+            publicKey.toBase58(),
           );
 
           const utxos = await getUtxos({
@@ -515,12 +493,12 @@ class PrivacyCashService {
           if (utxos.length > 0) {
             console.log(
               "[PrivacyCash] UTXO amounts:",
-              utxos.map((u) => u.amount.toString())
+              utxos.map((u) => u.amount.toString()),
             );
           }
 
           return getBalanceFromUtxos(utxos);
-        }
+        },
       );
 
       const balanceInSol = balanceResult.lamports / LAMPORTS_PER_SOL;
@@ -529,7 +507,7 @@ class PrivacyCashService {
         balanceResult.lamports,
         "lamports =",
         balanceInSol,
-        "SOL"
+        "SOL",
       );
 
       return balanceInSol;
@@ -537,7 +515,7 @@ class PrivacyCashService {
       console.error("[PrivacyCash] Get balance error:", error);
       console.error(
         "[PrivacyCash] Error stack:",
-        error instanceof Error ? error.stack : "No stack"
+        error instanceof Error ? error.stack : "No stack",
       );
       // Return 0 on error rather than throwing - but log the error for debugging
       return 0;

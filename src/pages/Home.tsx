@@ -328,6 +328,7 @@ const Home = () => {
 
         await loadWallets(net);
       } catch (error) {
+        // Handle errors gracefully - lock wallet instead of showing alerts
         console.error("[Veil] Error generating burner:", error);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
@@ -336,10 +337,12 @@ const Home = () => {
           errorMessage.includes("decrypt") ||
           errorMessage.includes("password")
         ) {
+          // Password-related errors - lock wallet
           setIsLocked(true);
           setPassword("");
           sessionStorage.removeItem("veil:session_password");
         } else {
+          // Other errors - also lock wallet for security
           setIsLocked(true);
           setPassword("");
           sessionStorage.removeItem("veil:session_password");
@@ -387,7 +390,6 @@ const Home = () => {
       setIsLocked(shouldBeLocked);
       setIsLoading(false);
 
-      // Load Privacy Cash mode setting
       const privacyCashEnabled = await getPrivacyCashMode();
       setPrivacyCashMode(privacyCashEnabled);
 
@@ -395,7 +397,6 @@ const Home = () => {
       setActiveNetworkState(net);
 
       if (!shouldBeLocked) {
-        // Restore password from sessionStorage if available
         const sessionPassword = sessionStorage.getItem("veil:session_password");
         if (sessionPassword && !password) {
           setPassword(sessionPassword);
@@ -403,7 +404,6 @@ const Home = () => {
 
         await loadWallets(net);
 
-        // Auto-generate first burner if none exist and wallet is unlocked
         const wallets = await getAllBurnerWallets(net);
         if (wallets.length === 0 && !isGenerating) {
           // Try to get password from state or sessionStorage
@@ -413,9 +413,8 @@ const Home = () => {
             sessionStorage.getItem("veil:temp_password");
           if (currentPassword) {
             if (!password) {
-              setPassword(currentPassword); // Store in state
+              setPassword(currentPassword);
             }
-            // Generate burner - errors will be handled gracefully inside
             await generateNewBurner(currentPassword, net);
           } else {
             // No password available - lock wallet gracefully
@@ -495,28 +494,19 @@ const Home = () => {
   useEffect(() => {
     const fetchSolPrice = async () => {
       try {
-        const response = await fetch(
+        const res = await fetch(
           "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
         );
-        if (!response.ok) {
-          throw new Error("Failed to fetch SOL price");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.solana?.usd) setSolPrice(data.solana.usd);
         }
-        const data = await response.json();
-        if (data.solana?.usd) {
-          setSolPrice(data.solana.usd);
-        }
-      } catch (error) {
-        console.error("[Veil] Error fetching SOL price:", error);
-        // Keep price as null, will use fallback
+      } catch (e) {
+        console.error("[Veil] Error fetching SOL price:", e);
       }
     };
-
-    // Fetch immediately
     fetchSolPrice();
-
-    // Refresh price every 5 minutes
     const interval = setInterval(fetchSolPrice, 5 * 60 * 1000);
-
     return () => clearInterval(interval);
   }, []);
 
@@ -607,16 +597,13 @@ const Home = () => {
       activeWalletIndex !== undefined &&
       privacyCashMode
     ) {
-      // Immediately load persisted balance from storage
       getStoredPrivateBalance(activeWalletIndex).then((storedBalance) => {
-        if (storedBalance > 0) {
-          setPrivateBalance(storedBalance);
-        }
+        if (storedBalance > 0) setPrivateBalance(storedBalance);
       });
     }
   }, [activeNetwork, activeWalletIndex, privacyCashMode]);
 
-  // Initialize Privacy Cash service (Solana only) and refresh balance when password is available
+  // Initialize Privacy Cash service (Solana only)
   useEffect(() => {
     const getPassword = () => {
       if (password) return password;
@@ -685,7 +672,7 @@ const Home = () => {
         isMounted = false;
       };
     }
-  }, [activeNetwork, isLocked, activeWalletIndex, password, privacyCashMode]);
+  }, [isLocked, activeWalletIndex, password, privacyCashMode]);
 
   // Periodically refresh balances and check for incoming SOL
   // Only depend on activeWalletIndex to prevent re-triggering loops
@@ -709,7 +696,8 @@ const Home = () => {
             "updates" in response &&
             response.updates
           ) {
-            const updatedWallets = await getAllBurnerWallets(activeNetwork);
+            // Only update the wallet list, don't change active wallet
+            const updatedWallets = await getAllBurnerWallets();
             if (!isMounted) return;
 
             setBurnerWallets(updatedWallets);
@@ -742,7 +730,7 @@ const Home = () => {
         clearInterval(interval);
       };
     }
-  }, [isLocked, activeWalletIndex, activeNetwork]);
+  }, [isLocked, activeWalletIndex]);
 
   // Deposit handler using real Privacy Cash service
   const handleDeposit = async (amount: number): Promise<void> => {
@@ -1708,10 +1696,14 @@ const Home = () => {
         }
       );
 
-      await loadWallets(activeNetwork);
+      // Reload wallets to update balance
+      await loadWallets();
+
+      // Update transaction as confirmed
       transaction.status = "confirmed";
       transaction.signature = signature;
       await storeTransaction(transaction);
+
       return signature;
     } catch (error) {
       console.error("[Veil] Transfer error details:", error);
@@ -1779,7 +1771,7 @@ const Home = () => {
       <div className="absolute bottom-[50px] left-[-30px] w-32 h-32 bg-blue-600/10 rounded-full blur-[40px]" />
 
       {/* Header & Wallet Selector */}
-      <div className="flex justify-between items-start z-10 px-3 py-3 relative">
+      <div className="flex justify-between items-center z-10 px-3 py-3 relative gap-2">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setShowWalletList(true)}
@@ -1853,7 +1845,7 @@ const Home = () => {
 
       {/* Main Content */}
       <div className="flex-1 px-3 pt-2 pb-3 z-10 flex flex-col overflow-y-auto">
-        {/* Network switcher */}
+        {/* Network switcher – minimal bar above balance */}
         <div
           role="tablist"
           aria-label="Network"
@@ -2071,7 +2063,7 @@ const Home = () => {
 
         {/* Additional Actions */}
         <div className="flex flex-col gap-2 mb-2">
-          {/* Privacy Cash buttons - Solana only, when Privacy Cash mode is enabled */}
+          {/* Privacy Cash buttons - Solana only */}
           {activeNetwork === "solana" && privacyCashMode && (
             <>
               {/* Deposit to Privacy - Standalone */}
@@ -2102,7 +2094,7 @@ const Home = () => {
           )}
 
           <button
-            onClick={() => generateNewBurner(undefined, activeNetwork)}
+            onClick={() => generateNewBurner()}
             disabled={isGenerating || (activeWallet?.balance ?? 0) > 0}
             className={`py-2.5 px-4 font-medium rounded-xl text-sm border flex items-center justify-center gap-2 transition-all ${
               !activeWallet || (activeWallet.balance ?? 0) === 0
@@ -2210,7 +2202,7 @@ const Home = () => {
                 <button
                   onClick={() => {
                     setShowWalletList(false);
-                    generateNewBurner(undefined, activeNetwork);
+                    generateNewBurner();
                   }}
                   disabled={isGenerating}
                   className="w-full p-2.5 rounded-lg flex items-center gap-2.5 bg-white/5 hover:bg-white/10 border border-dashed border-white/20 transition-colors mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2228,7 +2220,8 @@ const Home = () => {
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">Total Balance</span>
                   <span className="text-sm font-bold text-white">
-                    {totalBalance.toFixed(2)} SOL
+                    {totalBalance.toFixed(activeNetwork === "ethereum" ? 4 : 2)}{" "}
+                    {activeNetwork === "ethereum" ? "ETH" : "SOL"}
                   </span>
                 </div>
               </div>

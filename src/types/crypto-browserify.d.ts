@@ -1,4 +1,4 @@
-declare module "crypto-browserify" {
+declare module 'crypto-browserify' {
   // Type declaration for crypto-browserify polyfill
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const crypto: any;

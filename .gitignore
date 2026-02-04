@@ -1,19 +1,35 @@
+# Dependencies - only in packages, not root
 node_modules/
-dist/
-dist-ssr/
-build/
+packages/*/node_modules/
 
+# Build outputs
+dist/
+**/dist/
+dist-ssr/
+**/dist-ssr/
+build/
+**/build/
+
+# Logs
 logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
 
+# Environment variables - only in packages, not root
 .env
 .env.local
 .env.*.local
+packages/*/.env.local
+packages/*/.env.*.local
 
+# Local RPC lists (keep secrets/provider keys out of git)
+src/config/rpcs.ts
+
+# Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -24,10 +40,11 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
+# OS files
 Thumbs.db
+.DS_Store
+
+# Temporary files
 *.local
 *.tmp
 *.temp
-
-
-todo.md

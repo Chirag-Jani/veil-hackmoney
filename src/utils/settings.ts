@@ -13,7 +13,7 @@ const SETTINGS_KEYS = {
 
 /**
  * Get Privacy Cash mode setting.
- * Optional feature for unlinkable on-chain transfers; burner wallets are the core security.
+ * Privacy-by-default: unlinkable on-chain transfers; site-bound burner wallets are the core mechanism.
  */
 export async function getPrivacyCashMode(): Promise<boolean> {
   const result = await chrome.storage.local.get(
@@ -21,10 +21,12 @@ export async function getPrivacyCashMode(): Promise<boolean> {
   );
   const stored = result[SETTINGS_KEYS.PRIVACY_CASH_MODE];
 
+  // Default: true (Privacy Cash mode enabled) when no preference is stored
   if (stored === undefined) {
     return true;
   }
 
+  // Otherwise, respect the stored boolean
   return stored === true;
 }
 

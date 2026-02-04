@@ -1,7 +1,7 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDown, Loader2, Shield, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { getErrorMessage } from "../utils/errorHandler";
+import { AnimatePresence, motion } from 'framer-motion';
+import { ArrowDown, Loader2, Shield, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { getErrorMessage } from '../utils/errorHandler';
 
 interface DepositModalProps {
   isOpen: boolean;
@@ -10,20 +10,15 @@ interface DepositModalProps {
   availableBalance: number; // SOL balance available to deposit
 }
 
-const DepositModal = ({
-  isOpen,
-  onClose,
-  onDeposit,
-  availableBalance,
-}: DepositModalProps) => {
-  const [amount, setAmount] = useState<string>("");
+const DepositModal = ({ isOpen, onClose, onDeposit, availableBalance }: DepositModalProps) => {
+  const [amount, setAmount] = useState<string>('');
   const [isDepositing, setIsDepositing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
-      setAmount("");
+      setAmount('');
       setIsDepositing(false);
       setError(null);
     }
@@ -31,7 +26,7 @@ const DepositModal = ({
 
   const handleClose = () => {
     if (!isDepositing) {
-      setAmount("");
+      setAmount('');
       setError(null);
       onClose();
     }
@@ -44,45 +39,42 @@ const DepositModal = ({
 
   const handleDeposit = async () => {
     const depositAmount = parseFloat(amount);
-
+    
     // Validation
     if (isNaN(depositAmount) || depositAmount <= 0) {
-      setError("Please enter a valid amount");
+      setError('Please enter a valid amount');
       return;
     }
-
+    
     if (depositAmount > availableBalance) {
-      setError("Insufficient balance");
+      setError('Insufficient balance');
       return;
     }
-
+    
     if (depositAmount < 0.01) {
-      setError("Minimum deposit is 0.01 SOL");
+      setError('Minimum deposit is 0.01 SOL');
       return;
     }
 
     setIsDepositing(true);
     setError(null);
-
+    
     try {
       await onDeposit(depositAmount);
       // Success - close modal after a brief delay
       setTimeout(() => {
-        setAmount("");
+        setAmount('');
         setIsDepositing(false);
         onClose();
       }, 1000);
     } catch (err) {
-      setError(getErrorMessage(err, "depositing funds"));
+      setError(getErrorMessage(err, 'depositing funds'));
       setIsDepositing(false);
     }
   };
 
   const depositAmount = parseFloat(amount) || 0;
-  const isValid =
-    depositAmount > 0 &&
-    depositAmount <= availableBalance &&
-    depositAmount >= 0.01;
+  const isValid = depositAmount > 0 && depositAmount <= availableBalance && depositAmount >= 0.01;
 
   return (
     <AnimatePresence>
@@ -96,10 +88,10 @@ const DepositModal = ({
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
           />
           <motion.div
-            initial={{ y: "100%" }}
+            initial={{ y: '100%' }}
             animate={{ y: 0 }}
-            exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 25, stiffness: 300 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             className="fixed bottom-0 left-0 right-0 bg-gray-900 rounded-t-2xl z-50 border-t border-white/10 max-h-[90vh] overflow-y-auto"
           >
             <div className="flex justify-center pt-3 pb-2">
@@ -114,12 +106,8 @@ const DepositModal = ({
                     <Shield className="w-5 h-5 text-purple-400" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-white">
-                      Deposit to Privacy
-                    </h3>
-                    <p className="text-xs text-gray-500">
-                      Migrate funds to private balance
-                    </p>
+                    <h3 className="text-lg font-bold text-white">Deposit to Privacy</h3>
+                    <p className="text-xs text-gray-500">Migrate funds to private balance</p>
                   </div>
                 </div>
                 <button
@@ -134,20 +122,14 @@ const DepositModal = ({
               {/* Available Balance */}
               <div className="mb-4 p-3 rounded-lg bg-white/5 border border-white/10">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    Available Balance
-                  </span>
-                  <span className="text-sm font-semibold text-white">
-                    {availableBalance.toFixed(4)} SOL
-                  </span>
+                  <span className="text-xs text-gray-500">Available Balance</span>
+                  <span className="text-sm font-semibold text-white">{availableBalance.toFixed(4)} SOL</span>
                 </div>
               </div>
 
               {/* Amount Input */}
               <div className="mb-4">
-                <label className="block text-xs font-medium text-gray-400 mb-2">
-                  Amount to Deposit
-                </label>
+                <label className="block text-xs font-medium text-gray-400 mb-2">Amount to Deposit</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -171,7 +153,9 @@ const DepositModal = ({
                     MAX
                   </button>
                 </div>
-                {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+                {error && (
+                  <p className="mt-2 text-xs text-red-400">{error}</p>
+                )}
               </div>
 
               {/* Info Box */}
@@ -179,13 +163,10 @@ const DepositModal = ({
                 <div className="flex items-start gap-2">
                   <ArrowDown className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
                   <div className="flex-1">
-                    <p className="text-xs text-blue-300 font-medium mb-1">
-                      What happens next?
-                    </p>
+                    <p className="text-xs text-blue-300 font-medium mb-1">What happens next?</p>
                     <p className="text-xs text-blue-400/80">
-                      Your funds will be deposited into a privacy pool, making
-                      them unlinkable on-chain. This process typically takes
-                      30-60 seconds.
+                      Your funds will be deposited into a privacy pool, making them unlinkable on-chain. 
+                      This process typically takes 30-60 seconds.
                     </p>
                   </div>
                 </div>
@@ -198,8 +179,8 @@ const DepositModal = ({
                   disabled={!isValid || isDepositing}
                   className={`w-full py-3 px-4 font-semibold rounded-xl text-sm flex items-center justify-center gap-2 transition-all ${
                     isValid && !isDepositing
-                      ? "bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-500 hover:to-blue-500 active:scale-[0.98]"
-                      : "bg-white/5 text-gray-500 cursor-not-allowed border border-white/10"
+                      ? 'bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-500 hover:to-blue-500 active:scale-[0.98]'
+                      : 'bg-white/5 text-gray-500 cursor-not-allowed border border-white/10'
                   }`}
                 >
                   {isDepositing ? (
@@ -210,12 +191,7 @@ const DepositModal = ({
                   ) : (
                     <>
                       <Shield className="w-4 h-4" />
-                      <span>
-                        Deposit{" "}
-                        {depositAmount > 0
-                          ? `${depositAmount.toFixed(4)} SOL`
-                          : ""}
-                      </span>
+                      <span>Deposit {depositAmount > 0 ? `${depositAmount.toFixed(4)} SOL` : ''}</span>
                     </>
                   )}
                 </button>

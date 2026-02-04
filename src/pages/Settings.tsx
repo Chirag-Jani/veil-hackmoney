@@ -162,7 +162,7 @@ const Settings = () => {
       {/* Settings Options */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="space-y-2">
-          {/* Optional Private Transfers Toggle */}
+          {/* Private Transfers Toggle */}
           <div className="w-full p-4 bg-white/5 border border-white/10 rounded-xl">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -170,9 +170,7 @@ const Settings = () => {
                   <Key className="w-5 h-5 text-blue-400" />
                 </div>
                 <div className="text-left">
-                  <p className="font-semibold text-sm">
-                    Private Transfers (Optional)
-                  </p>
+                  <p className="font-semibold text-sm">Private Transfers</p>
                   <p className="text-xs text-gray-500">
                     {privacyCashMode
                       ? "Unlinkable transfers enabled"

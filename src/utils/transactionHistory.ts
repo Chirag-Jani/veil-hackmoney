@@ -1,15 +1,10 @@
 /**
  * Transaction History Management
- *
+ * 
  * Tracks all transactions: deposits, withdrawals, transfers, and incoming SOL
  */
 
-export type TransactionType =
-  | "deposit"
-  | "withdraw"
-  | "deposit_and_withdraw"
-  | "transfer"
-  | "incoming";
+export type TransactionType = 'deposit' | 'withdraw' | 'deposit_and_withdraw' | 'transfer' | 'incoming';
 
 export interface Transaction {
   id: string; // Unique transaction ID
@@ -20,7 +15,7 @@ export interface Transaction {
   toAddress?: string; // Destination address (for transfers/deposits)
   walletIndex?: number; // Associated burner wallet index
   signature?: string; // Transaction signature (if available)
-  status: "pending" | "confirmed" | "failed";
+  status: 'pending' | 'confirmed' | 'failed';
   error?: string; // Error message if failed
   privateBalanceBefore?: number; // Private balance before transaction (for deposits/withdrawals)
   privateBalanceAfter?: number; // Private balance after transaction
@@ -29,9 +24,7 @@ export interface Transaction {
 /**
  * Store a transaction in history
  */
-export async function storeTransaction(
-  transaction: Transaction
-): Promise<void> {
+export async function storeTransaction(transaction: Transaction): Promise<void> {
   const key = `veil:tx:${transaction.id}`;
   await chrome.storage.local.set({ [key]: transaction });
 }
@@ -44,7 +37,7 @@ export async function getAllTransactions(): Promise<Transaction[]> {
   const transactions: Transaction[] = [];
 
   for (const [key, value] of Object.entries(allData)) {
-    if (key.startsWith("veil:tx:")) {
+    if (key.startsWith('veil:tx:')) {
       transactions.push(value as Transaction);
     }
   }
@@ -69,7 +62,9 @@ export async function getTransactionsByWallet(
   walletIndex: number
 ): Promise<Transaction[]> {
   const allTransactions = await getAllTransactions();
-  return allTransactions.filter((tx) => tx.walletIndex === walletIndex);
+  return allTransactions.filter(
+    (tx) => tx.walletIndex === walletIndex
+  );
 }
 
 /**
@@ -90,7 +85,7 @@ export async function getTransactionsByDateRange(
  */
 export async function updateTransactionStatus(
   id: string,
-  status: Transaction["status"],
+  status: Transaction['status'],
   error?: string
 ): Promise<void> {
   const key = `veil:tx:${id}`;
@@ -117,7 +112,7 @@ export function generateTransactionId(): string {
  */
 export function formatTransactionAmount(amount: number): string {
   if (amount < 0.000001) {
-    return "< 0.000001";
+    return '< 0.000001';
   }
   if (amount < 0.01) {
     return amount.toFixed(6);
@@ -140,7 +135,7 @@ export function formatTransactionDate(timestamp: number): string {
   const diffDays = Math.floor(diffMs / 86400000);
 
   if (diffMins < 1) {
-    return "Just now";
+    return 'Just now';
   }
   if (diffMins < 60) {
     return `${diffMins}m ago`;
@@ -159,30 +154,17 @@ export function formatTransactionDate(timestamp: number): string {
  */
 export function formatTransactionDateDetailed(timestamp: number): string {
   const date = new Date(timestamp);
-  const months = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const month = months[date.getMonth()];
   const day = date.getDate();
   const year = date.getFullYear();
-
+  
   let hours = date.getHours();
   const minutes = date.getMinutes();
-  const ampm = hours >= 12 ? "pm" : "am";
+  const ampm = hours >= 12 ? 'pm' : 'am';
   hours = hours % 12;
   hours = hours ? hours : 12; // the hour '0' should be '12'
   const minutesStr = minutes < 10 ? `0${minutes}` : minutes;
-
+  
   return `${month} ${day}, ${year} at ${hours}:${minutesStr} ${ampm}`;
 }
