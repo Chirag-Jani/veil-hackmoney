@@ -32,10 +32,12 @@ const TransferModal = ({
   const [isTransferring, setIsTransferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isEth = network === "ethereum";
-  const symbol = isEth ? "ETH" : "SOL";
-  const feeEstimate = isEth ? 0.001 : 0.000005;
-  const minAmount = isEth ? 0.0001 : 0.000001;
+  const isEvm =
+    network === "ethereum" || network === "avalanche" || network === "arbitrum";
+  const symbol =
+    network === "avalanche" ? "AVAX" : isEvm ? "ETH" : "SOL";
+  const feeEstimate = isEvm ? 0.001 : 0.000005;
+  const minAmount = isEvm ? 0.0001 : 0.000001;
 
   const handleClose = () => {
     if (!isTransferring) {
@@ -48,7 +50,7 @@ const TransferModal = ({
 
   const handleMax = () => {
     const maxAmount = Math.max(0, availableBalance - feeEstimate);
-    setAmount(maxAmount.toFixed(isEth ? 6 : 9));
+    setAmount(maxAmount.toFixed(isEvm ? 6 : 9));
     setError(null);
   };
 
@@ -75,7 +77,7 @@ const TransferModal = ({
       return;
     }
 
-    if (isEth) {
+    if (isEvm) {
       if (!isValidEthAddress(recipient)) {
         setError("Invalid Ethereum address (0x + 40 hex characters)");
         return;
@@ -108,7 +110,7 @@ const TransferModal = ({
   };
 
   const transferAmount = parseFloat(amount) || 0;
-  const recipientValid = isEth
+  const recipientValid = isEvm
     ? isValidEthAddress(recipient)
     : recipient.length >= 32;
   const isValid =
@@ -175,7 +177,7 @@ const TransferModal = ({
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-xs text-gray-500">Available</span>
                   <span className="text-sm font-semibold text-white">
-                    {availableBalance.toFixed(isEth ? 6 : 4)} {symbol}
+                    {availableBalance.toFixed(isEvm ? 6 : 4)} {symbol}
                   </span>
                 </div>
               </div>
@@ -222,7 +224,7 @@ const TransferModal = ({
                     setRecipient(e.target.value);
                     setError(null);
                   }}
-                  placeholder={isEth ? "0x..." : "Enter Solana address"}
+                  placeholder={isEvm ? "0x..." : "Enter Solana address"}
                   disabled={isTransferring}
                   className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm"
                 />
@@ -255,7 +257,7 @@ const TransferModal = ({
                       <span>
                         Transfer{" "}
                         {transferAmount > 0
-                          ? `${transferAmount.toFixed(isEth ? 6 : 4)} ${symbol}`
+                          ? `${transferAmount.toFixed(isEvm ? 6 : 4)} ${symbol}`
                           : ""}
                       </span>
                     </>

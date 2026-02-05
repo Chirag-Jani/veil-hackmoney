@@ -51,3 +51,12 @@ It supports **two networks**:
 
 - Ethereum RPCs can be provided via extension env/config (with a built-in fallback RPC if none are set).
 - Solana and Ethereum wallet indices are tracked separately to avoid collisions across networks.
+
+## Todo — LI.FI (HackMoney track)
+
+- [ ] **Swap + bridge**: Replace “Coming soon” Swap with LI.FI-powered flow; support ≥2 EVM chains (e.g. Ethereum + Base/Arbitrum).
+- [ ] **SwapModal / Swap UI**: Source/destination chain + token, amount; get LI.FI quote; show route, slippage, gas; execute with Veil EVM signer (`getEthereumWalletForIndex` + ethers).
+- [ ] **LI.FI Composer**: Use Composer for one multi-step flow (e.g. swap+bridge in one sign) to target “Best Use of LI.FI Composer in DeFi” ($2.5k).
+- [ ] **UX**: Slippage tolerance, error handling, gas checks (match “Best LI.FI-Powered DeFi Integration” requirements).
+- [ ] **(Optional)** “Deposit from anywhere”: LI.FI route (e.g. ETH on Ethereum → SOL on Solana) then existing “Deposit to Privacy” flow.
+- [ ] **Docs**: [LI.FI docs](https://docs.li.fi/), [End-to-end example](https://docs.li.fi/introduction/user-flows-and-examples/end-to-end-example), [API](https://docs.li.fi/api-reference/introduction), [SDK](https://docs.li.fi/sdk/overview).

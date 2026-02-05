@@ -4,7 +4,7 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
-import { JsonRpcProvider, parseEther, Wallet } from "ethers";
+import { Contract, JsonRpcProvider, parseEther, Wallet } from "ethers";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowDownUp,
@@ -28,12 +28,19 @@ import ConnectionApproval from "../components/ConnectionApproval";
 import DepositModal from "../components/DepositModal";
 import SendPrivatelyModal from "../components/SendPrivatelyModal";
 import SignApproval from "../components/SignApproval";
+import SwapModal from "../components/SwapModal";
 import TransferModal from "../components/TransferModal";
 import UnlockWallet from "../components/UnlockWallet";
 import WithdrawModal from "../components/WithdrawModal";
 import type { CheckBalancesResponse, NetworkType } from "../types";
 import { getErrorMessage, logError } from "../utils/errorHandler";
-import { getEthRPCManager } from "../utils/ethRpcManager";
+import {
+  getArbitrumRPCManager,
+  getAvalancheRPCManager,
+  getEthRPCManager,
+} from "../utils/ethRpcManager";
+import { getRpcUrlForChain } from "../utils/lifi";
+import type { LifiQuote } from "../utils/lifi";
 import {
   generateBurnerKeypair,
   getDecryptedSeed,
@@ -99,6 +106,7 @@ const Home = () => {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [showSendPrivatelyModal, setShowSendPrivatelyModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showSwapModal, setShowSwapModal] = useState(false);
   const [showComingSoonModal, setShowComingSoonModal] = useState(false);
   const [comingSoonFeature, setComingSoonFeature] =
     useState<string>("This feature");
@@ -116,6 +124,7 @@ const Home = () => {
   const [activeNetwork, setActiveNetworkState] =
     useState<NetworkType>("ethereum");
   const [ethPrice, setEthPrice] = useState<number | null>(null);
+  const [avaxPrice, setAvaxPrice] = useState<number | null>(null);
 
   const loadWallets = useCallback(
     async (network?: NetworkType) => {
@@ -308,7 +317,10 @@ const Home = () => {
           };
           await storeBurnerWallet(newWallet);
           await setActiveBurnerIndex("solana", index);
-        } else if (net === "ethereum" && "address" in result) {
+        } else if (
+          (net === "ethereum" || net === "avalanche" || net === "arbitrum") &&
+          "address" in result
+        ) {
           const { address, index } = result;
           const accountNumber = await getNextAccountNumber(net);
           const accountName = `Account ${accountNumber}`;
@@ -320,10 +332,10 @@ const Home = () => {
             site: accountName,
             isActive: true,
             index,
-            network: "ethereum",
+            network: net,
           };
           await storeBurnerWallet(newWallet);
-          await setActiveBurnerIndex("ethereum", index);
+          await setActiveBurnerIndex(net, index);
         }
 
         await loadWallets(net);
@@ -510,9 +522,9 @@ const Home = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch ETH price when on Ethereum network
+  // Fetch ETH price when on Ethereum or Arbitrum
   useEffect(() => {
-    if (activeNetwork !== "ethereum") return;
+    if (activeNetwork !== "ethereum" && activeNetwork !== "arbitrum") return;
     const fetchEthPrice = async () => {
       try {
         const res = await fetch(
@@ -528,6 +540,27 @@ const Home = () => {
     };
     fetchEthPrice();
     const interval = setInterval(fetchEthPrice, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [activeNetwork]);
+
+  // Fetch AVAX price when on Avalanche
+  useEffect(() => {
+    if (activeNetwork !== "avalanche") return;
+    const fetchAvaxPrice = async () => {
+      try {
+        const res = await fetch(
+          "https://api.coingecko.com/api/v3/simple/price?ids=avalanche-2&vs_currencies=usd"
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data["avalanche-2"]?.usd) setAvaxPrice(data["avalanche-2"].usd);
+        }
+      } catch (e) {
+        console.error("[Veil] Error fetching AVAX price:", e);
+      }
+    };
+    fetchAvaxPrice();
+    const interval = setInterval(fetchAvaxPrice, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [activeNetwork]);
 
@@ -1538,14 +1571,20 @@ const Home = () => {
     };
     await storeTransaction(transaction);
 
-    if (activeWallet.network === "ethereum") {
-      const feeEstimateEth = 0.001;
-      const requiredBalanceEth = amount + feeEstimateEth;
-      if (activeWallet.balance < requiredBalanceEth) {
+    if (
+      activeWallet.network === "ethereum" ||
+      activeWallet.network === "avalanche" ||
+      activeWallet.network === "arbitrum"
+    ) {
+      const feeEstimate = 0.001;
+      const requiredBalance = amount + feeEstimate;
+      if (activeWallet.balance < requiredBalance) {
         transaction.status = "failed";
-        transaction.error = `Insufficient balance. Need at least ${requiredBalanceEth.toFixed(
+        const sym =
+          activeWallet.network === "avalanche" ? "AVAX" : "ETH";
+        transaction.error = `Insufficient balance. Need at least ${requiredBalance.toFixed(
           6
-        )} ETH (including gas).`;
+        )} ${sym} (including gas).`;
         await storeTransaction(transaction);
         throw new Error(transaction.error);
       }
@@ -1554,15 +1593,28 @@ const Home = () => {
           currentPassword,
           activeWallet.index
         );
-        const ethRpc = getEthRPCManager();
-        const tx = await ethRpc.executeWithRetry(async (rpcUrl) => {
-          const provider = new JsonRpcProvider(rpcUrl);
+        const chainId =
+          activeWallet.network === "arbitrum"
+            ? 42161
+            : activeWallet.network === "avalanche"
+              ? 43114
+              : 1;
+        const sendTx = async (rpcUrl: string) => {
+          const provider = new JsonRpcProvider(rpcUrl, chainId);
           const wallet = new Wallet(privateKey, provider);
           return wallet.sendTransaction({
             to: recipient,
             value: parseEther(amount.toString()),
           });
-        });
+        };
+        let tx;
+        if (activeWallet.network === "ethereum") {
+          tx = await getEthRPCManager().executeWithRetry(sendTx);
+        } else if (activeWallet.network === "avalanche") {
+          tx = await getAvalancheRPCManager().executeWithRetry(sendTx);
+        } else {
+          tx = await getArbitrumRPCManager().executeWithRetry(sendTx);
+        }
         transaction.status = "confirmed";
         transaction.signature = tx.hash;
         await storeTransaction(transaction);
@@ -1724,6 +1776,150 @@ const Home = () => {
     }
   };
 
+  const NATIVE_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000";
+  const ERC20_ABI = [
+    {
+      name: "allowance",
+      inputs: [
+        { name: "owner", type: "address", internalType: "address" },
+        { name: "spender", type: "address", internalType: "address" },
+      ],
+      outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+      stateMutability: "view",
+      type: "function",
+    },
+    {
+      name: "approve",
+      inputs: [
+        { name: "spender", type: "address", internalType: "address" },
+        { name: "amount", type: "uint256", internalType: "uint256" },
+      ],
+      outputs: [{ name: "", type: "bool", internalType: "bool" }],
+      stateMutability: "nonpayable",
+      type: "function",
+    },
+  ] as const;
+
+  const handleSwapExecute = useCallback(
+    async (quote: LifiQuote): Promise<string> => {
+      if (
+        !activeWallet ||
+        (activeWallet.network !== "ethereum" &&
+          activeWallet.network !== "avalanche" &&
+          activeWallet.network !== "arbitrum")
+      ) {
+        throw new Error("No active EVM wallet");
+      }
+      const walletLocked = await isWalletLocked();
+      if (walletLocked) {
+        throw new Error("Wallet is locked. Please unlock your wallet first.");
+      }
+      const sessionValid = await isSessionValid();
+      if (!sessionValid) {
+        setIsLocked(true);
+        setPassword("");
+        sessionStorage.removeItem("veil:session_password");
+        try {
+          await chrome.storage.session.remove("veil:session_password");
+        } catch {
+          // Ignore
+        }
+        await chrome.storage.local.remove("veil:temp_session_password");
+        throw new Error("Session expired. Please unlock your wallet again.");
+      }
+      let currentPassword = password;
+      if (!currentPassword) {
+        const sessionPassword = sessionStorage.getItem("veil:session_password");
+        if (sessionPassword) {
+          currentPassword = sessionPassword;
+          setPassword(sessionPassword);
+        } else {
+          try {
+            const sessionData = await chrome.storage.session.get(
+              "veil:session_password"
+            );
+            if (sessionData["veil:session_password"]) {
+              currentPassword = sessionData["veil:session_password"] as string;
+              setPassword(currentPassword);
+            }
+          } catch {
+            // Ignore
+          }
+        }
+        if (!currentPassword) {
+          const tempPassword = sessionStorage.getItem("veil:temp_password");
+          if (tempPassword) currentPassword = tempPassword;
+        }
+        if (!currentPassword) {
+          try {
+            const localData = await chrome.storage.local.get(
+              "veil:temp_session_password"
+            );
+            if (localData["veil:temp_session_password"]) {
+              currentPassword = localData["veil:temp_session_password"] as string;
+              setPassword(currentPassword);
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      }
+      if (!currentPassword) {
+        throw new Error("Session expired. Please unlock your wallet again.");
+      }
+      const { privateKey } = await getEthereumWalletForIndex(
+        currentPassword,
+        activeWallet.index
+      );
+      const chainId = quote.transactionRequest.chainId;
+      const fromTokenAddress = quote.action.fromToken.address;
+      const fromAmount = quote.action.fromAmount;
+      const approvalAddress = quote.estimate.approvalAddress;
+
+      const sendTx = async (rpcUrl: string) => {
+        const provider = new JsonRpcProvider(rpcUrl, chainId);
+        const wallet = new Wallet(privateKey, provider);
+        if (
+          fromTokenAddress &&
+          fromTokenAddress !== NATIVE_TOKEN_ADDRESS &&
+          approvalAddress
+        ) {
+          const erc20 = new Contract(fromTokenAddress, ERC20_ABI, wallet);
+          const allowance = await erc20.allowance(
+            await wallet.getAddress(),
+            approvalAddress
+          );
+          if (BigInt(allowance.toString()) < BigInt(fromAmount)) {
+            const approveTx = await erc20.approve(approvalAddress, fromAmount);
+            await approveTx.wait();
+          }
+        }
+        return wallet.sendTransaction(quote.transactionRequest);
+      };
+
+      let tx;
+      if (chainId === 1) {
+        tx = await getEthRPCManager().executeWithRetry(sendTx);
+      } else if (chainId === 42161) {
+        tx = await getArbitrumRPCManager().executeWithRetry(sendTx);
+      } else if (chainId === 43114) {
+        tx = await getAvalancheRPCManager().executeWithRetry(sendTx);
+      } else {
+        const rpcUrl = getRpcUrlForChain(chainId);
+        tx = await sendTx(rpcUrl);
+      }
+      await tx.wait();
+      await loadWallets(activeNetwork);
+      return tx.hash;
+    },
+    [
+      activeWallet,
+      password,
+      activeNetwork,
+      loadWallets,
+    ]
+  );
+
   // Show loading state during initial check
   if (isLoading) {
     return (
@@ -1845,7 +2041,7 @@ const Home = () => {
 
       {/* Main Content */}
       <div className="flex-1 px-3 pt-2 pb-3 z-10 flex flex-col overflow-y-auto">
-        {/* Network switcher – minimal bar above balance */}
+        {/* Network switcher – minimal bar above balance (one EVM at a time + Solana) */}
         <div
           role="tablist"
           aria-label="Network"
@@ -1862,6 +2058,30 @@ const Home = () => {
             }`}
           >
             Ethereum
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeNetwork === "avalanche"}
+            onClick={() => switchNetwork("avalanche")}
+            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
+              activeNetwork === "avalanche"
+                ? "bg-white/10 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Avalanche
+          </button>
+          <button
+            role="tab"
+            aria-selected={activeNetwork === "arbitrum"}
+            onClick={() => switchNetwork("arbitrum")}
+            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
+              activeNetwork === "arbitrum"
+                ? "bg-white/10 text-white"
+                : "text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Arbitrum
           </button>
           <button
             role="tab"
@@ -1887,14 +2107,20 @@ const Home = () => {
             $
             {(
               totalBalance *
-              (activeNetwork === "ethereum"
-                ? ethPrice ?? 2400
-                : solPrice ?? 145)
+              (activeNetwork === "solana"
+                ? solPrice ?? 145
+                : activeNetwork === "avalanche"
+                  ? avaxPrice ?? 35
+                  : ethPrice ?? 2400)
             ).toFixed(2)}
           </h1>
           <p className="text-sm text-gray-400">
-            {totalBalance.toFixed(activeNetwork === "ethereum" ? 6 : 4)}{" "}
-            {activeNetwork === "ethereum" ? "ETH" : "SOL"}
+            {totalBalance.toFixed(activeNetwork === "solana" ? 4 : 6)}{" "}
+            {activeNetwork === "solana"
+              ? "SOL"
+              : activeNetwork === "avalanche"
+                ? "AVAX"
+                : "ETH"}
           </p>
         </motion.div>
 
@@ -1934,8 +2160,16 @@ const Home = () => {
           )}
           <button
             onClick={() => {
-              setComingSoonFeature("Swap");
-              setShowComingSoonModal(true);
+              if (
+                activeNetwork === "ethereum" ||
+                activeNetwork === "avalanche" ||
+                activeNetwork === "arbitrum"
+              ) {
+                setShowSwapModal(true);
+              } else {
+                setComingSoonFeature("Swap");
+                setShowComingSoonModal(true);
+              }
             }}
             className="group flex flex-col items-center justify-center gap-1.5 py-3 px-2 bg-gray-800/50 hover:bg-gray-700/50 transition-colors duration-150 rounded-2xl active:scale-[0.97]"
           >
@@ -1988,13 +2222,23 @@ const Home = () => {
                 <div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-white">
-                      {activeNetwork === "solana" ? "Solana" : "Ethereum"}
+                      {activeNetwork === "solana"
+                        ? "Solana"
+                        : activeNetwork === "avalanche"
+                          ? "Avalanche"
+                          : activeNetwork === "arbitrum"
+                            ? "Arbitrum"
+                            : "Ethereum"}
                     </span>
                     <Check className="w-3.5 h-3.5 text-purple-400" />
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    {totalBalance.toFixed(activeNetwork === "ethereum" ? 6 : 5)}{" "}
-                    {activeNetwork === "ethereum" ? "ETH" : "SOL"}
+                    {totalBalance.toFixed(activeNetwork === "solana" ? 5 : 6)}{" "}
+                    {activeNetwork === "solana"
+                      ? "SOL"
+                      : activeNetwork === "avalanche"
+                        ? "AVAX"
+                        : "ETH"}
                   </p>
                 </div>
               </div>
@@ -2003,9 +2247,11 @@ const Home = () => {
                   $
                   {(
                     totalBalance *
-                    (activeNetwork === "ethereum"
-                      ? ethPrice ?? 2400
-                      : solPrice ?? 145)
+                    (activeNetwork === "solana"
+                      ? solPrice ?? 145
+                      : activeNetwork === "avalanche"
+                        ? avaxPrice ?? 35
+                        : ethPrice ?? 2400)
                   ).toFixed(2)}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">-</p>
@@ -2184,15 +2430,21 @@ const Home = () => {
                     <div className="text-right">
                       <p className="text-xs font-bold text-white">
                         {wallet.balance}{" "}
-                        {wallet.network === "ethereum" ? "ETH" : "SOL"}
+                        {wallet.network === "solana"
+                        ? "SOL"
+                        : wallet.network === "avalanche"
+                          ? "AVAX"
+                          : "ETH"}
                       </p>
                       <p className="text-[10px] text-gray-500">
                         $
                         {(
                           wallet.balance *
-                          (wallet.network === "ethereum"
-                            ? ethPrice ?? 2400
-                            : solPrice ?? 145)
+                          (wallet.network === "solana"
+                            ? solPrice ?? 145
+                            : wallet.network === "avalanche"
+                              ? avaxPrice ?? 35
+                              : ethPrice ?? 2400)
                         ).toFixed(2)}
                       </p>
                     </div>
@@ -2220,8 +2472,12 @@ const Home = () => {
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">Total Balance</span>
                   <span className="text-sm font-bold text-white">
-                    {totalBalance.toFixed(activeNetwork === "ethereum" ? 4 : 2)}{" "}
-                    {activeNetwork === "ethereum" ? "ETH" : "SOL"}
+                    {totalBalance.toFixed(activeNetwork === "solana" ? 2 : 4)}{" "}
+                    {activeNetwork === "solana"
+                      ? "SOL"
+                      : activeNetwork === "avalanche"
+                        ? "AVAX"
+                        : "ETH"}
                   </span>
                 </div>
               </div>
@@ -2426,6 +2682,30 @@ const Home = () => {
           availableBalance={activeWallet.balance}
           fromAddress={activeWallet.fullAddress}
           network={activeNetwork}
+        />
+      )}
+
+      {/* Swap Modal (EVM only; require active wallet to be EVM to avoid passing Solana address) */}
+      {activeWallet &&
+        (activeNetwork === "ethereum" ||
+          activeNetwork === "avalanche" ||
+          activeNetwork === "arbitrum") &&
+        (activeWallet.network === "ethereum" ||
+          activeWallet.network === "avalanche" ||
+          activeWallet.network === "arbitrum") && (
+        <SwapModal
+          isOpen={showSwapModal}
+          onClose={() => setShowSwapModal(false)}
+          onExecute={handleSwapExecute}
+          fromAddress={activeWallet.fullAddress}
+          availableBalanceEth={activeWallet.balance}
+          evmNetwork={
+            activeNetwork === "arbitrum"
+              ? "arbitrum"
+              : activeNetwork === "avalanche"
+                ? "avalanche"
+                : "ethereum"
+          }
         />
       )}
 

@@ -5,7 +5,12 @@
 
 import { PublicKey } from "@solana/web3.js";
 import type { NetworkType } from "../types";
-import { getEthBalance, weiToEth } from "./ethRpcManager";
+import {
+  getArbitrumBalance,
+  getAvalancheBalance,
+  getEthBalance,
+  weiToEth,
+} from "./ethRpcManager";
 import { createRPCManager, RPCManager } from "./rpcManager";
 import { getAllBurnerWallets, storeBurnerWallet } from "./storage";
 import {
@@ -64,6 +69,12 @@ class BalanceMonitor {
                 return lamports / 1e9;
               }
             );
+          } else if (wallet.network === "arbitrum") {
+            const wei = await getArbitrumBalance(wallet.fullAddress);
+            balance = weiToEth(wei);
+          } else if (wallet.network === "avalanche") {
+            const wei = await getAvalancheBalance(wallet.fullAddress);
+            balance = weiToEth(wei);
           } else {
             const wei = await getEthBalance(wallet.fullAddress);
             balance = weiToEth(wei);

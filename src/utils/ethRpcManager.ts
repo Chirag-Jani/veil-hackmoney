@@ -1,9 +1,14 @@
 /**
  * Ethereum RPC manager: multiple RPCs, random pick per attempt,
  * retry with a new RPC on failure up to 3 times.
+ * Also provides Arbitrum balance fetching for second EVM chain.
  */
 
-import { ETHEREUM_RPCS } from "../config/rpcs";
+import {
+  ARBITRUM_RPCS,
+  AVALANCHE_RPCS,
+  ETHEREUM_RPCS,
+} from "../config/rpcs";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 3000;
@@ -129,4 +134,86 @@ export async function getEthBalance(address: string): Promise<bigint> {
 
 export function weiToEth(wei: bigint): number {
   return Number(wei) / 1e18;
+}
+
+let arbitrumManagerInstance: EthRPCManager | null = null;
+
+export function getArbitrumRPCManager(): EthRPCManager {
+  if (!arbitrumManagerInstance) {
+    arbitrumManagerInstance = new EthRPCManager({
+      rpcUrls: [...ARBITRUM_RPCS],
+    });
+  }
+  return arbitrumManagerInstance;
+}
+
+/**
+ * Fetch ETH balance on Arbitrum (in wei) with retry across multiple RPCs.
+ */
+export async function getArbitrumBalance(address: string): Promise<bigint> {
+  return getArbitrumRPCManager().executeWithRetry(async (url) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_getBalance",
+        params: [address, "latest"],
+      }),
+    });
+    if (!res.ok) throw new Error(`Arbitrum RPC error: ${res.status}`);
+    const data = (await res.json()) as {
+      result?: string;
+      error?: { message: string };
+    };
+    if (data.error) {
+      throw new Error(data.error.message || "eth_getBalance failed");
+    }
+    const hex = data.result;
+    if (typeof hex !== "string")
+      throw new Error("Invalid eth_getBalance result");
+    return BigInt(hex);
+  });
+}
+
+let avalancheManagerInstance: EthRPCManager | null = null;
+
+export function getAvalancheRPCManager(): EthRPCManager {
+  if (!avalancheManagerInstance) {
+    avalancheManagerInstance = new EthRPCManager({
+      rpcUrls: [...AVALANCHE_RPCS],
+    });
+  }
+  return avalancheManagerInstance;
+}
+
+/**
+ * Fetch AVAX balance on Avalanche C-Chain (in wei) with retry.
+ */
+export async function getAvalancheBalance(address: string): Promise<bigint> {
+  return getAvalancheRPCManager().executeWithRetry(async (url) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_getBalance",
+        params: [address, "latest"],
+      }),
+    });
+    if (!res.ok) throw new Error(`Avalanche RPC error: ${res.status}`);
+    const data = (await res.json()) as {
+      result?: string;
+      error?: { message: string };
+    };
+    if (data.error) {
+      throw new Error(data.error.message || "eth_getBalance failed");
+    }
+    const hex = data.result;
+    if (typeof hex !== "string")
+      throw new Error("Invalid eth_getBalance result");
+    return BigInt(hex);
+  });
 }

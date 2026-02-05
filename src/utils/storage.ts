@@ -104,8 +104,10 @@ export async function getAllBurnerWallets(
     const wallet = value as BurnerWallet;
     if (wallet.archived) continue;
 
-    // New format: veil:burner:solana:0 or veil:burner:ethereum:0
-    const newMatch = key.match(/^veil:burner:(solana|ethereum):(\d+)$/);
+    // New format: veil:burner:solana:0, veil:burner:ethereum:0, veil:burner:arbitrum:0
+    const newMatch = key.match(
+      /^veil:burner:(solana|ethereum|avalanche|arbitrum):(\d+)$/
+    );
     if (newMatch) {
       const walletNetwork = newMatch[1] as NetworkType;
       if (network !== undefined && walletNetwork !== network) continue;
@@ -172,7 +174,9 @@ export async function getArchivedBurnerWallets(
     if (!key.startsWith("veil:burner:")) continue;
     const wallet = value as BurnerWallet & { network?: NetworkType };
     if (!wallet.archived) continue;
-    const newFormat = key.match(/^veil:burner:(solana|ethereum):(\d+)$/);
+    const newFormat = key.match(
+      /^veil:burner:(solana|ethereum|avalanche|arbitrum):(\d+)$/
+    );
     const net: NetworkType = newFormat
       ? (newFormat[1] as NetworkType)
       : "solana";

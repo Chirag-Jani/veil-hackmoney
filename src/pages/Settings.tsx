@@ -87,9 +87,13 @@ const Settings = () => {
         return;
       }
 
-      if (targetWallet.network === "ethereum") {
-        const { address, privateKey: ethPrivateKey } =
-          await getEthereumWalletForIndex(password, targetWallet.index);
+      if (
+          targetWallet.network === "ethereum" ||
+          targetWallet.network === "avalanche" ||
+          targetWallet.network === "arbitrum"
+        ) {
+          const { address, privateKey: ethPrivateKey } =
+            await getEthereumWalletForIndex(password, targetWallet.index);
         if (address.toLowerCase() !== targetWallet.fullAddress.toLowerCase()) {
           console.error("[Veil] Ethereum address mismatch:", {
             derived: address,
@@ -101,12 +105,12 @@ const Settings = () => {
           return;
         }
         setPrivateKey(ethPrivateKey);
-      } else {
-        const walletKeypair = await getKeypairForIndex(
-          password,
-          targetWallet.index
-        );
-        const derivedPublicKey = walletKeypair.publicKey.toBase58();
+        } else {
+          const walletKeypair = await getKeypairForIndex(
+            password,
+            targetWallet.index
+          );
+          const derivedPublicKey = walletKeypair.publicKey.toBase58();
         if (derivedPublicKey !== targetWallet.fullAddress) {
           console.error("[Veil] Public key mismatch:", {
             derived: derivedPublicKey,

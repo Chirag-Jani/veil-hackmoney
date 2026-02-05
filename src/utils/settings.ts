@@ -40,12 +40,18 @@ export async function setPrivacyCashMode(enabled: boolean): Promise<void> {
 }
 
 /**
- * Get active network (Ethereum or Solana). Default: ethereum.
+ * Get active network (Ethereum, Arbitrum, or Solana). Default: ethereum.
  */
 export async function getActiveNetwork(): Promise<NetworkType> {
   const result = await chrome.storage.local.get(SETTINGS_KEYS.ACTIVE_NETWORK);
   const stored = result[SETTINGS_KEYS.ACTIVE_NETWORK];
-  if (stored === "ethereum" || stored === "solana") return stored;
+  if (
+    stored === "ethereum" ||
+    stored === "avalanche" ||
+    stored === "arbitrum" ||
+    stored === "solana"
+  )
+    return stored;
   return "ethereum";
 }
 

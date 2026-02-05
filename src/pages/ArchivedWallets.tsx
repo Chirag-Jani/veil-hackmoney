@@ -53,9 +53,13 @@ const ArchivedWallets = () => {
     setPasswordError("");
 
     try {
-      if (selectedWallet.network === "ethereum") {
-        const { address, privateKey: ethPrivateKey } =
-          await getEthereumWalletForIndex(password, selectedWallet.index);
+      if (
+          selectedWallet.network === "ethereum" ||
+          selectedWallet.network === "avalanche" ||
+          selectedWallet.network === "arbitrum"
+        ) {
+          const { address, privateKey: ethPrivateKey } =
+            await getEthereumWalletForIndex(password, selectedWallet.index);
         if (
           address.toLowerCase() !== selectedWallet.fullAddress.toLowerCase()
         ) {
@@ -69,25 +73,25 @@ const ArchivedWallets = () => {
           return;
         }
         setPrivateKey(ethPrivateKey);
-      } else {
-        const walletKeypair = await getKeypairForIndex(
-          password,
-          selectedWallet.index
-        );
-        const derivedPublicKey = walletKeypair.publicKey.toBase58();
-        if (derivedPublicKey !== selectedWallet.fullAddress) {
-          console.error("[Veil] Public key mismatch:", {
-            derived: derivedPublicKey,
-            stored: selectedWallet.fullAddress,
-            index: selectedWallet.index,
-          });
-          setPasswordError("Key derivation mismatch. Please try again.");
-          setPassword("");
-          return;
+        } else {
+          const walletKeypair = await getKeypairForIndex(
+            password,
+            selectedWallet.index
+          );
+          const derivedPublicKey = walletKeypair.publicKey.toBase58();
+          if (derivedPublicKey !== selectedWallet.fullAddress) {
+            console.error("[Veil] Public key mismatch:", {
+              derived: derivedPublicKey,
+              stored: selectedWallet.fullAddress,
+              index: selectedWallet.index,
+            });
+            setPasswordError("Key derivation mismatch. Please try again.");
+            setPassword("");
+            return;
+          }
+          const secretKeyBytes = new Uint8Array(walletKeypair.secretKey);
+          setPrivateKey(bs58.encode(secretKeyBytes));
         }
-        const secretKeyBytes = new Uint8Array(walletKeypair.secretKey);
-        setPrivateKey(bs58.encode(secretKeyBytes));
-      }
       setPassword("");
     } catch {
       setPasswordError("Incorrect password. Please try again.");

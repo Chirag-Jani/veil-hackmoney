@@ -1,7 +1,7 @@
 // Centralized types for the extension
 
-/** Supported chain: Solana (mainnet) or Ethereum (mainnet). Private transfers only on Solana. */
-export type NetworkType = "solana" | "ethereum";
+/** Supported chains: Solana + 3 EVM only (Ethereum, Avalanche, Arbitrum). One at a time. Private transfers only on Solana. */
+export type NetworkType = "solana" | "ethereum" | "avalanche" | "arbitrum";
 
 // Message types
 export type MessageType =
