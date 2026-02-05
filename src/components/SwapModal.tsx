@@ -12,11 +12,14 @@ import { getErrorMessage } from "../utils/errorHandler";
 import { getTokenIconUrl } from "../utils/tokenIcons";
 import type { LifiChainId } from "../utils/lifi";
 import {
+  getChainById,
   getLifiQuote,
+  getLifiRoutes,
   getTokensForChain,
   LIFI_CHAINS,
   LIFI_TOKENS_BY_CHAIN,
   type LifiQuote,
+  type LifiRoute,
 } from "../utils/lifi";
 
 type TokenWithChain = {
@@ -66,6 +69,8 @@ interface SwapModalProps {
   isOpen: boolean;
   onClose: () => void;
   onExecute: (quote: LifiQuote) => Promise<string>;
+  /** Multi-step route (bridge + swap). When set, used instead of onExecute for cross-chain. */
+  onExecuteRoute?: (route: LifiRoute) => Promise<string>;
   fromAddress: string;
   availableBalanceEth: number;
   /** Fetch native balance for the given chain (ETH/AVAX). Returns balance in token units. */
@@ -80,6 +85,7 @@ export default function SwapModal({
   isOpen,
   onClose,
   onExecute,
+  onExecuteRoute,
   fromAddress,
   availableBalanceEth,
   getBalanceForChain,
@@ -128,6 +134,7 @@ export default function SwapModal({
   const [slippage, setSlippage] = useState(0.005);
   const [showSlippage, setShowSlippage] = useState(false);
   const [quote, setQuote] = useState<LifiQuote | null>(null);
+  const [route, setRoute] = useState<LifiRoute | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -231,7 +238,35 @@ export default function SwapModal({
     ).toString();
     setQuoteLoading(true);
     setQuoteError(null);
+    setRoute(null);
+    setQuote(null);
     try {
+      const fromTokenAddr =
+        fromToken.address === NATIVE_ADDRESS
+          ? "0x0000000000000000000000000000000000000000"
+          : fromToken.address;
+      const toTokenAddr =
+        toToken.address === NATIVE_ADDRESS
+          ? "0x0000000000000000000000000000000000000000"
+          : toToken.address;
+
+      const isCrossChain = fromChainId !== toChainId;
+      if (isCrossChain && onExecuteRoute) {
+        const { routes } = await getLifiRoutes({
+          fromChainId,
+          toChainId,
+          fromTokenAddress: fromTokenAddr,
+          toTokenAddress: toTokenAddr,
+          fromAmount: fromAmountWei,
+          fromAddress,
+          slippage,
+        });
+        if (routes.length > 0) {
+          setRoute(routes[0]!);
+          return;
+        }
+      }
+
       const fromTokenParam =
         fromToken.address === NATIVE_ADDRESS
           ? fromToken.symbol
@@ -251,6 +286,7 @@ export default function SwapModal({
     } catch (e) {
       console.error("[SwapModal] Quote error:", e);
       setQuote(null);
+      setRoute(null);
       setQuoteError(getErrorMessage(e, "fetching quote"));
     } finally {
       setQuoteLoading(false);
@@ -266,6 +302,7 @@ export default function SwapModal({
     toToken.address,
     toToken.symbol,
     slippage,
+    onExecuteRoute,
   ]);
 
   useEffect(() => {
@@ -278,6 +315,7 @@ export default function SwapModal({
     if (!executing) {
       setAmount("");
       setQuote(null);
+      setRoute(null);
       setQuoteError(null);
       setExecuteError(null);
       setShowSlippage(false);
@@ -302,6 +340,19 @@ export default function SwapModal({
   };
 
   const handleExecute = async () => {
+    if (route && onExecuteRoute) {
+      setExecuting(true);
+      setExecuteError(null);
+      try {
+        await onExecuteRoute(route);
+        handleClose();
+      } catch (e) {
+        setExecuteError(getErrorMessage(e, "executing swap"));
+      } finally {
+        setExecuting(false);
+      }
+      return;
+    }
     if (!quote) return;
     setExecuting(true);
     setExecuteError(null);
@@ -320,8 +371,9 @@ export default function SwapModal({
     fromToken.symbol === "ETH" || fromToken.symbol === "AVAX"
       ? amountNum <= effectiveBalance && effectiveBalance >= 0.001
       : true;
+  const hasQuoteOrRoute = quote || route;
   const canConfirm =
-    quote && amountNum > 0 && hasEnoughBalance && !quoteLoading && !executing;
+    hasQuoteOrRoute && amountNum > 0 && hasEnoughBalance && !quoteLoading && !executing;
 
   return (
     <AnimatePresence>
@@ -492,12 +544,17 @@ export default function SwapModal({
                 </p>
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex-1 min-w-0 text-lg font-semibold text-white tabular-nums">
-                    {quote
+                    {route
                       ? formatTokenAmount(
-                          quote.estimate.toAmount,
+                          route.toAmount,
                           toToken.decimals,
                         )
-                      : "0.00"}
+                      : quote
+                        ? formatTokenAmount(
+                            quote.estimate.toAmount,
+                            toToken.decimals,
+                          )
+                        : "0.00"}
                   </div>
                   <button
                     type="button"
@@ -535,17 +592,32 @@ export default function SwapModal({
                     <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
                   </button>
                 </div>
-                {quote && (
+                {(quote || route) && (
                   <p className="text-[11px] text-gray-500 mt-1 pt-1 border-t border-white/5">
                     Min received:{" "}
                     <span className="text-gray-400">
                       {formatTokenAmount(
-                        quote.estimate.toAmountMin,
+                        route ? route.toAmountMin : quote!.estimate.toAmountMin,
                         toToken.decimals,
                       )}{" "}
                       {toToken.symbol}
                     </span>
                     <span className="text-gray-600"> · slippage</span>
+                  </p>
+                )}
+                {route && route.steps.length > 1 && (
+                  <p className="mt-1.5 pt-1.5 border-t border-white/5 text-[11px] text-gray-500">
+                    {route.steps
+                      .map((step, idx) => {
+                        const fromChain = getChainById(step.action.fromChainId);
+                        const toChain = getChainById(step.action.toChainId);
+                        return step.type === "swap"
+                          ? `Step ${idx + 1}: Swap on ${fromChain?.name ?? step.action.fromChainId}`
+                          : step.type === "cross"
+                            ? `Step ${idx + 1}: Bridge → ${toChain?.name ?? step.action.toChainId}`
+                            : `Step ${idx + 1}: ${step.tool}`;
+                      })
+                      .join(" · ")}
                   </p>
                 )}
               </div>
@@ -722,17 +794,27 @@ export default function SwapModal({
                 </div>
               )}
 
-              {quote &&
-                quote.estimate.gasCosts &&
-                quote.estimate.gasCosts.length > 0 && (
+              {((route && route.steps[0]?.estimate.gasCosts?.length) ||
+                (quote &&
+                  quote.estimate.gasCosts &&
+                  quote.estimate.gasCosts.length > 0)) && (
                   <div className="mb-2 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 text-[11px] text-gray-500">
                     Est. gas:{" "}
-                    {quote.estimate.gasCosts
-                      .map(
-                        (g) =>
-                          `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
-                      )
-                      .join(", ")}
+                    {route
+                      ? route.steps
+                          .flatMap((s) => s.estimate.gasCosts ?? [])
+                          .slice(0, 3)
+                          .map(
+                            (g) =>
+                              `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
+                          )
+                          .join(", ")
+                      : quote!.estimate.gasCosts!
+                          .map(
+                            (g) =>
+                              `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
+                          )
+                          .join(", ")}
                   </div>
                 )}
 
@@ -764,7 +846,7 @@ export default function SwapModal({
                     </>
                   )}
                 </button>
-                {!canConfirm && amountNum > 0 && quote && !hasEnoughBalance && (
+                {!canConfirm && amountNum > 0 && hasQuoteOrRoute && !hasEnoughBalance && (
                   <p className="text-[11px] text-amber-400/90 text-center -mt-1">
                     Insufficient balance
                   </p>

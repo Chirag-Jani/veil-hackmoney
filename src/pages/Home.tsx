@@ -54,8 +54,12 @@ import {
   getKeypairForIndex,
   hasWallet,
 } from "../utils/keyManager";
-import type { LifiQuote } from "../utils/lifi";
-import { getRpcUrlForChain, LIFI_TOKENS_BY_CHAIN } from "../utils/lifi";
+import type { LifiQuote, LifiRoute } from "../utils/lifi";
+import {
+  getRpcUrlForChain,
+  getStepTransaction,
+  LIFI_TOKENS_BY_CHAIN,
+} from "../utils/lifi";
 import { sendMessage } from "../utils/messaging";
 import { getPrivacyCashService } from "../utils/privacyCashService";
 import { createRPCManager } from "../utils/rpcManager";
@@ -2106,6 +2110,177 @@ const Home = () => {
     [activeWallet, password, activeNetwork, loadWallets],
   );
 
+  const handleSwapExecuteRoute = useCallback(
+    async (route: LifiRoute): Promise<string> => {
+      if (
+        !activeWallet ||
+        (activeWallet.network !== "ethereum" &&
+          activeWallet.network !== "avalanche" &&
+          activeWallet.network !== "arbitrum")
+      ) {
+        throw new Error("No active EVM wallet");
+      }
+      const walletLocked = await isWalletLocked();
+      if (walletLocked) {
+        throw new Error("Wallet is locked. Please unlock your wallet first.");
+      }
+      const sessionValid = await isSessionValid();
+      if (!sessionValid) {
+        setIsLocked(true);
+        setPassword("");
+        sessionStorage.removeItem("veil:session_password");
+        try {
+          await chrome.storage.session.remove("veil:session_password");
+        } catch {
+          // Ignore
+        }
+        await chrome.storage.local.remove("veil:temp_session_password");
+        throw new Error("Session expired. Please unlock your wallet again.");
+      }
+      let currentPassword = password;
+      if (!currentPassword) {
+        const sessionPassword = sessionStorage.getItem("veil:session_password");
+        if (sessionPassword) {
+          currentPassword = sessionPassword;
+          setPassword(sessionPassword);
+        } else {
+          try {
+            const sessionData = await chrome.storage.session.get(
+              "veil:session_password",
+            );
+            if (sessionData["veil:session_password"]) {
+              currentPassword = sessionData["veil:session_password"] as string;
+              setPassword(currentPassword);
+            }
+          } catch {
+            // Ignore
+          }
+        }
+        if (!currentPassword) {
+          const tempPassword = sessionStorage.getItem("veil:temp_password");
+          if (tempPassword) currentPassword = tempPassword;
+        }
+        if (!currentPassword) {
+          try {
+            const localData = await chrome.storage.local.get(
+              "veil:temp_session_password",
+            );
+            if (localData["veil:temp_session_password"]) {
+              currentPassword = localData[
+                "veil:temp_session_password"
+              ] as string;
+              setPassword(currentPassword);
+            }
+          } catch {
+            // Ignore
+          }
+        }
+      }
+      if (!currentPassword) {
+        throw new Error("Session expired. Please unlock your wallet again.");
+      }
+      const { privateKey } = await getEthereumWalletForIndex(
+        currentPassword,
+        activeWallet.index,
+      );
+      const fromAddress = activeWallet.fullAddress;
+
+      const swapTxId = generateTransactionId();
+      const firstStep = route.steps[0];
+      const networkForTx: NetworkType =
+        firstStep.action.fromChainId === 43114
+          ? "avalanche"
+          : firstStep.action.fromChainId === 42161
+            ? "arbitrum"
+            : "ethereum";
+      const swapTransaction: TransactionRecord = {
+        id: swapTxId,
+        type: "swap",
+        timestamp: Date.now(),
+        amount:
+          Number(route.fromAmount) /
+          10 ** (route.fromToken?.decimals ?? 18),
+        fromAddress: activeWallet.fullAddress,
+        walletIndex: activeWallet.index,
+        status: "pending",
+        network: networkForTx,
+        symbol: route.fromToken?.symbol ?? "ETH",
+      };
+      await storeTransaction(swapTransaction);
+
+      const sendTxForStep = async (
+        stepWithTx: Awaited<ReturnType<typeof getStepTransaction>>,
+      ) => {
+        const chainId = stepWithTx.transactionRequest.chainId;
+        const fromTokenAddress = stepWithTx.action.fromToken?.address;
+        const fromAmount = stepWithTx.action.fromAmount;
+        const approvalAddress = stepWithTx.estimate.approvalAddress;
+        const req = stepWithTx.transactionRequest;
+
+        const doSend = async (rpcUrl: string) => {
+          const provider = new JsonRpcProvider(rpcUrl, chainId);
+          const wallet = new Wallet(privateKey, provider);
+          if (
+            fromTokenAddress &&
+            fromTokenAddress !== NATIVE_TOKEN_ADDRESS &&
+            approvalAddress
+          ) {
+            const erc20 = new Contract(fromTokenAddress, ERC20_ABI, wallet);
+            const allowance = await erc20.allowance(
+              await wallet.getAddress(),
+              approvalAddress,
+            );
+            if (BigInt(allowance.toString()) < BigInt(fromAmount)) {
+              const approveTx = await erc20.approve(
+                approvalAddress,
+                fromAmount,
+              );
+              await approveTx.wait();
+            }
+          }
+          return wallet.sendTransaction(req);
+        };
+
+        if (chainId === 1) {
+          return getEthRPCManager().executeWithRetry(doSend);
+        }
+        if (chainId === 42161) {
+          return getArbitrumRPCManager().executeWithRetry(doSend);
+        }
+        if (chainId === 43114) {
+          return getAvalancheRPCManager().executeWithRetry(doSend);
+        }
+        const rpcUrl = getRpcUrlForChain(chainId);
+        return doSend(rpcUrl);
+      };
+
+      try {
+        let lastTxHash: string | null = null;
+        for (let i = 0; i < route.steps.length; i++) {
+          const step = route.steps[i];
+          const stepWithTx = await getStepTransaction(step, {
+            fromAddress,
+            toAddress: fromAddress,
+          });
+          const tx = await sendTxForStep(stepWithTx);
+          await tx.wait();
+          lastTxHash = tx.hash;
+        }
+        swapTransaction.status = "confirmed";
+        swapTransaction.signature = lastTxHash ?? undefined;
+        await storeTransaction(swapTransaction);
+        await loadWallets(activeNetwork);
+        return lastTxHash ?? "";
+      } catch (err) {
+        swapTransaction.status = "failed";
+        swapTransaction.error = getErrorMessage(err, "executing swap");
+        await storeTransaction(swapTransaction);
+        throw err;
+      }
+    },
+    [activeWallet, password, activeNetwork, loadWallets],
+  );
+
   const getBalanceForChain = useCallback(
     async (chainId: number): Promise<number> => {
       if (!activeWallet?.fullAddress) return 0;
@@ -3108,6 +3283,7 @@ const Home = () => {
             isOpen={showSwapModal}
             onClose={() => setShowSwapModal(false)}
             onExecute={handleSwapExecute}
+            onExecuteRoute={handleSwapExecuteRoute}
             fromAddress={activeWallet.fullAddress}
             availableBalanceEth={activeWallet.balance}
             getBalanceForChain={getBalanceForChain}

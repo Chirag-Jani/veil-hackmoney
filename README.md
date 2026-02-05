@@ -1,14 +1,10 @@
-# Veil (HackMoney) Extension
+# Veil — HackMoney Submission
 
 **Privacy by default. Multi-chain (EVM + Solana) wallet for private transfers and burner identities.**
 
-Veil is a privacy-focused burner wallet browser extension built for fast, disposable onchain identities.
+Veil is a privacy-focused burner wallet browser extension built for fast, disposable onchain identities. This repo is the **HackMoney** build with **LI.FI** integration for swap, bridge, and multi-step cross-chain flows.
 
-It supports **four networks** (one active at a time):
-- **Ethereum (mainnet)**: burners, balance, transfer ETH, and **swap/bridge** via LI.FI.
-- **Avalanche (mainnet)**: burners, balance, transfer AVAX, and **swap/bridge** via LI.FI.
-- **Arbitrum (mainnet)**: burners, balance, transfer ETH, and **swap/bridge** via LI.FI.
-- **Solana**: burners, balance, transfer SOL, and (optionally) Veil “Privacy Cash” private transfer flows.
+---
 
 ## What it does
 
@@ -26,46 +22,75 @@ It supports **four networks** (one active at a time):
   - **Avalanche**: send **AVAX** to any `0x…` address.
   - **Solana**: send **SOL** to any Solana address.
 
-- **Swap & bridge (EVM only)**
-  - **LI.FI-powered swap** across Ethereum, Avalanche, and Arbitrum (source/destination chain + token, quote, slippage, execute with Veil signer).
+- **Swap & bridge (EVM) — LI.FI**
+  - **Same-chain**: single-step swap via LI.FI `GET /quote` (e.g. ETH → USDC on Ethereum).
+  - **Cross-chain**: multi-step routes via LI.FI `POST /advanced/routes` — e.g. ETH on Ethereum → USDC on Arbitrum in one flow (swap + bridge or bridge + swap). Steps are executed in sequence; the UI shows “Step 1: … · Step 2: …” when there are multiple steps.
+  - **3 EVM chains**: Ethereum, Avalanche, Arbitrum. Source/destination chain + token, amount, slippage (0.5 / 1 / 3%), gas estimate, balance checks, error handling.
 
 - **Balance monitoring**
   - Background balance monitoring for **SOL, ETH, AVAX** (per network).
 
 - **dApp connection (Solana + Ethereum providers)**
-  - Exposes a **Solana-compatible provider** via `window.veil` and coexists under `window.solana.providers` when other wallets are installed.
-  - Exposes a **minimal EIP-1193 Ethereum provider** via `window.ethereum` (only if no other Ethereum provider is present) and always via `window.veilEthereum`.
-  - Connection is **origin-scoped** (sites must request access) and requires the wallet to be **unlocked** plus **user approval** in the popup.
-  - Solana: supports connect/disconnect and **message signing** approval flows (transaction signing is currently not available).
-  - Ethereum: supports `eth_chainId`, `net_version`, `eth_accounts`, `eth_coinbase`, `eth_requestAccounts`, and `wallet_*` permission methods needed for basic dApp connection.
+  - **Solana**: `window.veil` and `window.solana.providers`; connect, disconnect, message signing.
+  - **Ethereum**: `window.ethereum` (if no other provider) and `window.veilEthereum`; `eth_requestAccounts`, `eth_chainId`, etc.
 
-- **Privacy Cash mode (Solana-only)**
-  - When enabled in settings, Solana burners can use private transfer flows:
-    - **Deposit to privacy**
-    - **Withdraw from privacy**
-    - **Private transfer**
-  - These actions are **hidden/disabled on Ethereum**.
+- **Privacy Cash (Solana-only)**
+  - Deposit to privacy, withdraw from privacy, private transfer (when enabled in settings).
 
-## Key management & export
+- **Key management**
+  - Encrypted seed; export private key (EVM hex, Solana Base58/Phantom format).
 
-- Burners are derived from an encrypted seed stored by the extension.
-- **Export private key** is supported for all networks:
-  - **Ethereum / Avalanche / Arbitrum**: exports a hex private key for the selected EVM burner.
-  - **Solana**: exports a Base58 secret key for the selected Solana burner (Phantom import format).
+---
 
-## Asset prices
+## LI.FI integration (HackMoney track)
 
-- **ETH**, **AVAX**, and **SOL** USD prices are **fetched dynamically** from CoinGecko (on load and every 5 minutes). Fallback values are used only until the first successful fetch or if the request fails.
+| Item | Status |
+|------|--------|
+| Swap + bridge (3 EVM chains) | Done |
+| Single-step quote (`GET /quote`) | Done |
+| Multi-step routes (`POST /advanced/routes`) | Done |
+| Per-step transaction (`POST /advanced/stepTransaction`) | Done |
+| Execute steps in sequence (bridge + swap in one flow) | Done |
+| Slippage, gas estimate, error handling | Done |
 
-## Notes
+**APIs used:** `GET /quote`, `POST /v1/advanced/routes`, `POST /v1/advanced/stepTransaction`.
 
-- Ethereum, Avalanche, and Arbitrum RPCs are configured in `src/config/rpcs.ts` (with retry across multiple RPCs per chain).
-- Solana and EVM wallet indices are tracked separately per network to avoid collisions.
+**Eligible tracks:**
+- **Best LI.FI-Powered DeFi Integration ($1,500)** — Veil as wallet; LI.FI for cross-chain swap/bridge; slippage, errors, gas handling.
+- **Best Use of LI.FI Composer in DeFi ($2,500)** — Multi-step cross-chain flow in one UX (e.g. swap on chain A → bridge to chain B); working frontend; ≥2 EVM chains.
 
-## LI.FI (HackMoney track) — current status
+---
 
-- [x] **Swap + bridge**: LI.FI-powered Swap modal; **3 EVM chains** (Ethereum, Avalanche, Arbitrum).
-- [x] **SwapModal**: Source/destination chain + token, amount; LI.FI quote; route summary, slippage (0.5 / 1 / 3%), gas estimate; execute with Veil EVM signer.
-- [x] **UX**: Slippage tolerance, error handling, balance/gas checks.
-- [ ] **LI.FI Composer** (optional): Multi-step composed routes for “Best Use of LI.FI Composer in DeFi” ($2.5k).
-- **Docs**: [LI.FI API](https://docs.li.fi/api-reference/introduction), [End-to-end example](https://docs.li.fi/introduction/user-flows-and-examples/end-to-end-example).
+## Run / install (for judges)
+
+1. **Prerequisites:** Node.js (v18+), npm or pnpm.
+2. **Install:** `npm install`
+3. **Build:** `npm run build`
+4. **Load in browser:** Open Chrome/Edge → Extensions → “Load unpacked” → select the `dist` folder (or the extension output directory from your build).
+5. **Use:** Create/unlock a wallet, switch to Ethereum/Avalanche/Arbitrum, open Swap and try same-chain or cross-chain (e.g. ETH on Ethereum → USDC on Arbitrum).
+
+---
+
+## Hackathon submission checklist
+
+- [ ] **Github repo:** Public repo link submitted.
+- [ ] **Video demo:** Short walkthrough covering:
+  - What Veil is (burner wallet, multi-chain).
+  - **LI.FI:** Open Swap, pick cross-chain (e.g. Ethereum → Arbitrum), show quote and **multi-step route** (“Step 1: … · Step 2: …” when applicable), then execute. Mention same-chain swap and slippage/gas/errors.
+  - Optional: same-chain swap, transfers, or dApp connection.
+- [ ] **Composer track (if targeting $2.5k):** Video clearly shows one cross-chain flow with **at least two EVM chains** and a **multi-step** journey (e.g. swap then bridge, or bridge then swap) in one flow.
+
+---
+
+## Tech notes
+
+- **EVM RPCs:** `src/config/rpcs.ts` (retry across multiple RPCs per chain).
+- **LI.FI:** `src/utils/lifi.ts` (quote, routes, stepTransaction); execution in `Home.tsx` (`handleSwapExecute`, `handleSwapExecuteRoute`) and `SwapModal.tsx`.
+- **Chains:** Ethereum (1), Avalanche (43114), Arbitrum (42161). Solana separate.
+
+---
+
+## Links
+
+- [LI.FI API](https://docs.li.fi/api-reference/introduction)
+- [LI.FI Composer / multi-step](https://docs.li.fi/introduction/user-flows-and-examples/lifi-composer)

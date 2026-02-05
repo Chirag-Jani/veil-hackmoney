@@ -143,3 +143,157 @@ export function getTokensForChain(chainId: number) {
 export function getChainById(chainId: number) {
   return LIFI_CHAINS.find((c) => c.id === chainId);
 }
+
+// --- Advanced routes (multi-step / Composer) ---
+
+export interface LifiRouteToken {
+  address: string;
+  symbol: string;
+  decimals: number;
+  chainId?: number;
+  name?: string;
+}
+
+export interface LifiStepAction {
+  fromChainId: number;
+  toChainId: number;
+  fromToken: LifiRouteToken;
+  toToken: LifiRouteToken;
+  fromAmount: string;
+  slippage: number;
+  fromAddress?: string;
+  toAddress?: string;
+}
+
+export interface LifiStepEstimate {
+  fromAmount: string;
+  toAmount: string;
+  toAmountMin: string;
+  approvalAddress?: string;
+  gasCosts?: Array<{
+    type: string;
+    amount: string;
+    amountUSD?: string;
+    token: { symbol: string; decimals: number; address: string };
+  }>;
+}
+
+export interface LifiStep {
+  id: string;
+  type: "swap" | "cross" | "lifi" | "protocol";
+  tool: string;
+  toolDetails?: { name: string; logoURI?: string };
+  action: LifiStepAction;
+  estimate: LifiStepEstimate;
+  data?: unknown;
+  integrator?: string;
+}
+
+export interface LifiStepWithTransaction extends LifiStep {
+  transactionRequest: LifiTransactionRequest;
+}
+
+export interface LifiRoute {
+  id: string;
+  fromChainId: number;
+  fromAmount: string;
+  fromToken: LifiRouteToken;
+  toChainId: number;
+  toAmount: string;
+  toAmountMin: string;
+  toToken: LifiRouteToken;
+  gasCostUSD?: string;
+  steps: LifiStep[];
+}
+
+export interface GetRoutesParams {
+  fromChainId: number;
+  toChainId: number;
+  fromTokenAddress: string;
+  toTokenAddress: string;
+  fromAmount: string;
+  fromAddress: string;
+  toAddress?: string;
+  slippage?: number;
+}
+
+const INTEGRATOR = "veil";
+
+export async function getLifiRoutes(
+  params: GetRoutesParams,
+): Promise<{ routes: LifiRoute[] }> {
+  const {
+    fromChainId,
+    toChainId,
+    fromTokenAddress,
+    toTokenAddress,
+    fromAmount,
+    fromAddress,
+    toAddress = fromAddress,
+    slippage = 0.005,
+  } = params;
+
+  const res = await fetch(`${LIFI_API}/advanced/routes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fromChainId,
+      toChainId,
+      fromTokenAddress,
+      toTokenAddress,
+      fromAmount,
+      fromAddress,
+      toAddress,
+      options: {
+        slippage,
+        integrator: INTEGRATOR,
+        allowSwitchChain: true,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `LI.FI routes failed: ${res.status}`);
+  }
+
+  const data = (await res.json()) as { routes?: LifiRoute[] };
+  const routes = data.routes ?? [];
+  return { routes };
+}
+
+/** Get transaction payload for one step. Call once per step; for multi-step, call after previous step is confirmed. */
+export async function getStepTransaction(
+  step: LifiStep,
+  options: { fromAddress: string; toAddress?: string },
+): Promise<LifiStepWithTransaction> {
+  const { fromAddress, toAddress = fromAddress } = options;
+  const stepWithAddresses: LifiStep = {
+    ...step,
+    action: {
+      ...step.action,
+      fromAddress,
+      toAddress,
+    },
+  };
+
+  const res = await fetch(`${LIFI_API}/advanced/stepTransaction`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...stepWithAddresses,
+      integrator: step.integrator ?? INTEGRATOR,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `LI.FI stepTransaction failed: ${res.status}`);
+  }
+
+  const data = (await res.json()) as LifiStepWithTransaction;
+  if (!data.transactionRequest) {
+    throw new Error("LI.FI stepTransaction did not return transactionRequest");
+  }
+  return data;
+}
