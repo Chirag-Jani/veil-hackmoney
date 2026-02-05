@@ -340,7 +340,7 @@ onMessageType("providerRequest", async (message, sender) => {
         // Store connected site
         const activeWallet = await getActiveBurnerWalletForNetwork("ethereum");
         const address = activeWallet?.fullAddress ?? activeWallet?.address;
-        if (!address) {
+        if (!address || !activeWallet) {
           return {
             success: false,
             error: { code: -32000, message: "No active Ethereum wallet found." },

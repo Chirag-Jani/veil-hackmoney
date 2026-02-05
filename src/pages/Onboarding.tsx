@@ -3,16 +3,21 @@ import { ArrowRight, Check, Copy, Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  deriveKeypairFromSeed,
+  ethPrivateKeyToSeed,
   generateMnemonic,
+  getPrivateKeyFormat,
   mnemonicToSeed,
   privateKeyToKeypair,
   privateKeyToSeed,
   setImportTypeSeed,
   storeEncryptedSeed,
+  storeImportedEthereumPrivateKey,
   storeImportedPrivateKey,
   validateMnemonic,
   validatePrivateKey,
 } from "../utils/keyManager";
+import { Wallet } from "ethers";
 import { setActiveBurnerIndex } from "../utils/settings";
 import {
   formatAddress,
@@ -111,7 +116,7 @@ const Onboarding = () => {
 
       if (!validatePrivateKey(privateKeyInput)) {
         setRestoreError(
-          "Invalid private key. Accepts base58 string or byte array format."
+          "Invalid private key. Use Solana (base58 or byte array) or Ethereum (64 hex chars, optional 0x)."
         );
         return;
       }
@@ -140,28 +145,65 @@ const Onboarding = () => {
         await storeEncryptedSeed(seed, password);
         await setImportTypeSeed(); // Mark as seed-based wallet
       } else {
-        // Private key import: store both the seed (for burners) and original keypair
-        seed = privateKeyToSeed(privateKeyInput);
-        await storeEncryptedSeed(seed, password);
-        await storeImportedPrivateKey(privateKeyInput, password); // Store original keypair
+        const keyFormat = getPrivateKeyFormat(privateKeyInput);
 
-        // Create wallet entry for index 0 (the imported wallet)
-        const importedKeypair = privateKeyToKeypair(privateKeyInput);
-        const address = getAddressFromKeypair(importedKeypair);
+        if (keyFormat === "ethereum") {
+          seed = ethPrivateKeyToSeed(privateKeyInput);
+          await storeEncryptedSeed(seed, password);
+          await storeImportedEthereumPrivateKey(privateKeyInput, password);
 
-        const importedWallet: BurnerWallet = {
-          id: Date.now(),
-          address: formatAddress(address),
-          fullAddress: address,
-          balance: 0,
-          site: "Imported Wallet",
-          isActive: true,
-          index: 0,
-          network: "solana",
-        };
+          const ethWallet = new Wallet(
+            privateKeyInput.trim().startsWith("0x")
+              ? privateKeyInput.trim()
+              : `0x${privateKeyInput.trim()}`
+          );
+          const ethBurner: BurnerWallet = {
+            id: Date.now(),
+            address: formatAddress(ethWallet.address),
+            fullAddress: ethWallet.address,
+            balance: 0,
+            site: "Imported Wallet",
+            isActive: true,
+            index: 0,
+            network: "ethereum",
+          };
+          await storeBurnerWallet(ethBurner);
+          await setActiveBurnerIndex("ethereum", 0);
 
-        await storeBurnerWallet(importedWallet);
-        await setActiveBurnerIndex("solana", 0);
+          const solKeypair = deriveKeypairFromSeed(seed, 0);
+          const solAddress = getAddressFromKeypair(solKeypair);
+          const solBurner: BurnerWallet = {
+            id: Date.now() + 1,
+            address: formatAddress(solAddress),
+            fullAddress: solAddress,
+            balance: 0,
+            site: "Imported Wallet",
+            isActive: true,
+            index: 0,
+            network: "solana",
+          };
+          await storeBurnerWallet(solBurner);
+          await setActiveBurnerIndex("solana", 0);
+        } else {
+          seed = privateKeyToSeed(privateKeyInput);
+          await storeEncryptedSeed(seed, password);
+          await storeImportedPrivateKey(privateKeyInput, password);
+
+          const importedKeypair = privateKeyToKeypair(privateKeyInput);
+          const address = getAddressFromKeypair(importedKeypair);
+          const importedWallet: BurnerWallet = {
+            id: Date.now(),
+            address: formatAddress(address),
+            fullAddress: address,
+            balance: 0,
+            site: "Imported Wallet",
+            isActive: true,
+            index: 0,
+            network: "solana",
+          };
+          await storeBurnerWallet(importedWallet);
+          await setActiveBurnerIndex("solana", 0);
+        }
       }
 
       await unlockWallet();
@@ -404,7 +446,7 @@ const Onboarding = () => {
                     setPrivateKeyInput(e.target.value);
                     setRestoreError("");
                   }}
-                  placeholder="Enter private key (base58 or byte array)..."
+                  placeholder="Enter private key (Solana: base58/byte array; ETH: 64 hex chars)"
                   className="w-full h-32 bg-white/5 border border-white/10 rounded-xl p-4 text-sm text-gray-300 font-mono placeholder-gray-600 focus:outline-none focus:border-white/20 transition-colors resize-none"
                 />
               )}

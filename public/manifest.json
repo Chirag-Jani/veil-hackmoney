@@ -3,7 +3,6 @@
   "name": "Veil",
   "version": "1.0.0",
   "description": "Privacy by default. Multi-chain wallet for Ethereum and Solana—private transfers and burner identities.",
-  "website_url": "https://veil.xyz",
   "icons": {
     "16": "veil_shield.png",
     "48": "veil_shield.png",

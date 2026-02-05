@@ -7,7 +7,7 @@ import { Keypair } from "@solana/web3.js";
 import * as bip39 from "bip39";
 import englishWordlist from "bip39/src/wordlists/english.json";
 import bs58 from "bs58";
-import { HDNodeWallet } from "ethers";
+import { HDNodeWallet, Wallet } from "ethers";
 import type { NetworkType } from "../types";
 import { decrypt, encrypt } from "./crypto";
 
@@ -72,6 +72,9 @@ const STORAGE_KEYS = {
   IMPORTED_PRIVATE_KEY: "veil:imported_private_key",
   IMPORTED_PK_SALT: "veil:imported_pk_salt",
   IMPORTED_PK_IV: "veil:imported_pk_iv",
+  IMPORTED_ETH_PRIVATE_KEY: "veil:imported_eth_private_key",
+  IMPORTED_ETH_PK_SALT: "veil:imported_eth_pk_salt",
+  IMPORTED_ETH_PK_IV: "veil:imported_eth_pk_iv",
   IMPORT_TYPE: "veil:import_type",
 } as const;
 
@@ -97,23 +100,34 @@ export function validateMnemonic(mnemonic: string): boolean {
 }
 
 /**
- * Validate a private key (base58 or byte array format)
- * Solana private keys are 64 bytes (32 seed + 32 public key)
- * or 32 bytes (seed only)
+ * Detect private key format: Solana (base58 or byte array) or Ethereum (hex)
+ */
+export function getPrivateKeyFormat(privateKey: string): "solana" | "ethereum" {
+  const trimmed = privateKey.trim();
+  if (trimmed.startsWith("0x") && /^0x[0-9a-fA-F]{64}$/.test(trimmed))
+    return "ethereum";
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return "ethereum";
+  return "solana";
+}
+
+/**
+ * Validate a private key (Solana: base58 or byte array; Ethereum: 64-char hex with optional 0x)
  */
 export function validatePrivateKey(privateKey: string): boolean {
-  try {
-    const trimmed = privateKey.trim();
+  const trimmed = privateKey.trim();
 
-    // Try to parse as JSON array (byte array format from Phantom export)
+  // Ethereum: 64 hex chars, optional 0x prefix
+  if (trimmed.startsWith("0x") && /^0x[0-9a-fA-F]{64}$/.test(trimmed))
+    return true;
+  if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return true;
+
+  // Solana: base58 or byte array
+  try {
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       const bytes = JSON.parse(trimmed);
       if (!Array.isArray(bytes)) return false;
-      // Accept 64 bytes (full keypair) or 32 bytes (seed only)
       return bytes.length === 64 || bytes.length === 32;
     }
-
-    // Try to parse as base58 string (Phantom export format)
     const decoded = bs58.decode(trimmed);
     return decoded.length === 64 || decoded.length === 32;
   } catch {
@@ -146,19 +160,39 @@ export function privateKeyToKeypair(privateKey: string): Keypair {
  */
 export function privateKeyToSeed(privateKey: string): Uint8Array {
   const keypair = privateKeyToKeypair(privateKey);
-  // Use the secret key seed (first 32 bytes) and pad to 64 bytes for HD derivation
   const seedPart = keypair.secretKey.slice(0, 32);
+  return expandSeedTo64(seedPart);
+}
 
-  // Create a 64-byte seed by hashing/expanding the 32-byte seed
-  // This is needed for HD derivation which expects 64 bytes
+/**
+ * Normalize Ethereum private key (hex, with or without 0x) to 32 bytes
+ */
+function normalizeEthPrivateKey(hex: string): Uint8Array {
+  const trimmed = hex.trim().replace(/^0x/, "");
+  if (trimmed.length !== 64) throw new Error("Ethereum private key must be 64 hex chars (32 bytes)");
+  return hexToUint8Array(trimmed);
+}
+
+/**
+ * Expand 32-byte seed to 64 bytes for HD derivation (same expansion as Solana path)
+ */
+function expandSeedTo64(seedPart: Uint8Array): Uint8Array {
+  if (seedPart.length !== 32) throw new Error("Seed part must be 32 bytes");
   const seed = new Uint8Array(64);
   seed.set(seedPart, 0);
-  // For the second half, we XOR with a constant to differentiate
   for (let i = 0; i < 32; i++) {
-    seed[32 + i] = seedPart[i] ^ 0x5c; // HMAC-style expansion
+    seed[32 + i] = seedPart[i] ^ 0x5c;
   }
-
   return seed;
+}
+
+/**
+ * Convert Ethereum private key (hex) to 64-byte seed for HD derivation of burners.
+ * Index 0 ETH will use the imported key; SOL and ETH burners derive from this seed.
+ */
+export function ethPrivateKeyToSeed(ethPrivateKey: string): Uint8Array {
+  const seedPart = normalizeEthPrivateKey(ethPrivateKey);
+  return expandSeedTo64(seedPart);
 }
 
 /**
@@ -179,10 +213,39 @@ export async function storeImportedPrivateKey(
     [STORAGE_KEYS.IMPORTED_PK_IV]: iv,
     [STORAGE_KEYS.IMPORT_TYPE]: "privateKey",
   });
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY,
+    STORAGE_KEYS.IMPORTED_ETH_PK_SALT,
+    STORAGE_KEYS.IMPORTED_ETH_PK_IV,
+  ]);
 }
 
 /**
- * Get the imported private key keypair (for index 0)
+ * Store the original imported Ethereum private key (encrypted) for index 0
+ */
+export async function storeImportedEthereumPrivateKey(
+  privateKey: string,
+  password: string
+): Promise<void> {
+  const normalized = normalizeEthPrivateKey(privateKey);
+  const hex = uint8ArrayToHex(normalized);
+  const { encrypted, salt, iv } = await encrypt(hex, password);
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY]: encrypted,
+    [STORAGE_KEYS.IMPORTED_ETH_PK_SALT]: salt,
+    [STORAGE_KEYS.IMPORTED_ETH_PK_IV]: iv,
+    [STORAGE_KEYS.IMPORT_TYPE]: "privateKeyEth",
+  });
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.IMPORTED_PRIVATE_KEY,
+    STORAGE_KEYS.IMPORTED_PK_SALT,
+    STORAGE_KEYS.IMPORTED_PK_IV,
+  ]);
+}
+
+/**
+ * Get the imported private key keypair (for index 0) — Solana only
  */
 export async function getImportedKeypair(
   password: string
@@ -217,11 +280,46 @@ export async function getImportedKeypair(
 }
 
 /**
- * Check if wallet was imported via private key
+ * Get the imported Ethereum private key (for index 0)
+ */
+export async function getImportedEthereumPrivateKey(
+  password: string
+): Promise<string | null> {
+  const result = await chrome.storage.local.get([
+    STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY,
+    STORAGE_KEYS.IMPORTED_ETH_PK_SALT,
+    STORAGE_KEYS.IMPORTED_ETH_PK_IV,
+    STORAGE_KEYS.IMPORT_TYPE,
+  ]);
+
+  if (
+    result[STORAGE_KEYS.IMPORT_TYPE] !== "privateKeyEth" ||
+    !result[STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY]
+  ) {
+    return null;
+  }
+
+  try {
+    const hex = await decrypt(
+      result[STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY],
+      result[STORAGE_KEYS.IMPORTED_ETH_PK_SALT],
+      result[STORAGE_KEYS.IMPORTED_ETH_PK_IV],
+      password
+    );
+    return hex.startsWith("0x") ? hex : `0x${hex}`;
+  } catch (error) {
+    console.error("[Veil] Error decrypting imported ETH key:", error);
+    return null;
+  }
+}
+
+/**
+ * Check if wallet was imported via private key (Solana or Ethereum)
  */
 export async function isPrivateKeyImport(): Promise<boolean> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.IMPORT_TYPE);
-  return result[STORAGE_KEYS.IMPORT_TYPE] === "privateKey";
+  const t = result[STORAGE_KEYS.IMPORT_TYPE];
+  return t === "privateKey" || t === "privateKeyEth";
 }
 
 /**
@@ -231,11 +329,13 @@ export async function setImportTypeSeed(): Promise<void> {
   await chrome.storage.local.set({
     [STORAGE_KEYS.IMPORT_TYPE]: "seed",
   });
-  // Clear any stored private key
   await chrome.storage.local.remove([
     STORAGE_KEYS.IMPORTED_PRIVATE_KEY,
     STORAGE_KEYS.IMPORTED_PK_SALT,
     STORAGE_KEYS.IMPORTED_PK_IV,
+    STORAGE_KEYS.IMPORTED_ETH_PRIVATE_KEY,
+    STORAGE_KEYS.IMPORTED_ETH_PK_SALT,
+    STORAGE_KEYS.IMPORTED_ETH_PK_IV,
   ]);
 }
 
@@ -514,6 +614,13 @@ export async function getEthereumWalletForIndex(
   password: string,
   index: number
 ): Promise<{ address: string; privateKey: string }> {
+  if (index === 0) {
+    const importedPk = await getImportedEthereumPrivateKey(password);
+    if (importedPk) {
+      const wallet = new Wallet(importedPk);
+      return { address: wallet.address, privateKey: importedPk };
+    }
+  }
   const seed = await getDecryptedSeed(password);
   return deriveEthereumWalletFromSeed(seed, index);
 }
