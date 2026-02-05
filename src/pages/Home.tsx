@@ -2727,21 +2727,6 @@ const Home = () => {
               </button>
             </>
           )}
-
-          <button
-            onClick={() => generateNewBurner()}
-            disabled={isGenerating || (activeWallet?.balance ?? 0) > 0}
-            className={`py-2.5 px-4 font-medium rounded-xl text-sm border flex items-center justify-center gap-2 transition-all ${
-              !activeWallet || (activeWallet.balance ?? 0) === 0
-                ? "bg-white/5 text-white border-white/20 hover:bg-white/10 hover:border-white/30 active:scale-[0.98]"
-                : "bg-white/5 text-gray-600 border-white/5 cursor-not-allowed"
-            }`}
-          >
-            <RefreshCw
-              className={`w-4 h-4 ${isGenerating ? "animate-spin" : ""}`}
-            />
-            <span>{isGenerating ? "Generating..." : "New Address"}</span>
-          </button>
         </div>
       </div>
 
