@@ -177,7 +177,7 @@ const TransferModal = ({
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-xs text-gray-500">Available</span>
                   <span className="text-sm font-semibold text-white">
-                    {availableBalance.toFixed(isEvm ? 6 : 4)} {symbol}
+                    {availableBalance.toFixed(3)} {symbol}
                   </span>
                 </div>
               </div>
@@ -257,7 +257,7 @@ const TransferModal = ({
                       <span>
                         Transfer{" "}
                         {transferAmount > 0
-                          ? `${transferAmount.toFixed(isEvm ? 6 : 4)} ${symbol}`
+                          ? `${transferAmount.toFixed(3)} ${symbol}`
                           : ""}
                       </span>
                     </>

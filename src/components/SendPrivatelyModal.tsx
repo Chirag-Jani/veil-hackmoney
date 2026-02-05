@@ -166,7 +166,7 @@ const SendPrivatelyModal = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-gray-500">Available Balance</span>
                   <span className="text-sm font-semibold text-white">
-                    {availableBalance.toFixed(4)} SOL
+                    {availableBalance.toFixed(3)} SOL
                   </span>
                 </div>
               </div>
@@ -320,7 +320,7 @@ const SendPrivatelyModal = ({
                     <>
                       <Shield className="w-4 h-4" />
                       <span>
-                        Send {sendAmount > 0 ? `${sendAmount.toFixed(4)} SOL` : ""} Privately
+                        Send {sendAmount > 0 ? `${sendAmount.toFixed(3)} SOL` : ""} Privately
                       </span>
                     </>
                   )}

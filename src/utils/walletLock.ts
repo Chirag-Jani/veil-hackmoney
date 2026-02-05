@@ -4,7 +4,7 @@
  */
 
 const LOCK_STORAGE_KEY = 'veil:is_locked';
-const SESSION_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+const SESSION_TIMEOUT = 60 * 60 * 1000; // 1 hour
 const SESSION_KEY = 'veil:session_expiry';
 
 /**

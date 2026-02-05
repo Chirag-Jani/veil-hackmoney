@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getErrorMessage } from "../utils/errorHandler";
+import { getTokenIconUrl } from "../utils/tokenIcons";
 import type { LifiChainId } from "../utils/lifi";
 import {
   getLifiQuote,
@@ -58,9 +59,7 @@ function isEvmAddress(addr: string): boolean {
 
 function formatTokenAmount(amountWei: string, decimals: number): string {
   const n = Number(amountWei) / 10 ** decimals;
-  if (n >= 1e6) return n.toFixed(2);
-  if (n >= 1) return n.toFixed(4);
-  return n.toFixed(6);
+  return n.toFixed(3);
 }
 
 interface SwapModalProps {
@@ -435,12 +434,25 @@ export default function SwapModal({
                     className="flex items-center gap-1.5 shrink-0 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 px-2.5 py-2 transition-colors"
                   >
                     <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                        CHAIN_COLORS[fromChainId] ??
-                        "bg-white/10 text-gray-300 border-white/10"
+                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold overflow-hidden shrink-0 ${
+                        !getTokenIconUrl(fromToken.symbol)
+                          ? CHAIN_COLORS[fromChainId] ??
+                            "bg-white/10 text-gray-300 border border-white/10"
+                          : ""
                       }`}
                     >
-                      {fromToken.symbol.slice(0, 1)}
+                      {(() => {
+                        const iconUrl = getTokenIconUrl(fromToken.symbol);
+                        return iconUrl ? (
+                          <img
+                            src={iconUrl}
+                            alt={fromToken.symbol}
+                            className="w-6 h-6 object-contain"
+                          />
+                        ) : (
+                          fromToken.symbol.slice(0, 1)
+                        );
+                      })()}
                     </div>
                     <span className="text-xs font-semibold text-white">
                       {fromToken.symbol}
@@ -461,7 +473,7 @@ export default function SwapModal({
                     {fromToken.symbol === "ETH" || fromToken.symbol === "AVAX"
                       ? balanceLoading
                         ? "…"
-                        : `${effectiveBalance.toFixed(6)} ${fromToken.symbol} Max`
+                        : `${effectiveBalance.toFixed(3)} ${fromToken.symbol} Max`
                       : "—"}
                   </button>
                 </div>
@@ -497,12 +509,25 @@ export default function SwapModal({
                     className="flex items-center gap-1.5 shrink-0 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 px-2.5 py-2 transition-colors"
                   >
                     <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                        CHAIN_COLORS[toChainId] ??
-                        "bg-white/10 text-gray-300 border-white/10"
+                      className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold overflow-hidden shrink-0 ${
+                        !getTokenIconUrl(toToken.symbol)
+                          ? CHAIN_COLORS[toChainId] ??
+                            "bg-white/10 text-gray-300 border border-white/10"
+                          : ""
                       }`}
                     >
-                      {toToken.symbol.slice(0, 1)}
+                      {(() => {
+                        const iconUrl = getTokenIconUrl(toToken.symbol);
+                        return iconUrl ? (
+                          <img
+                            src={iconUrl}
+                            alt={toToken.symbol}
+                            className="w-6 h-6 object-contain"
+                          />
+                        ) : (
+                          toToken.symbol.slice(0, 1)
+                        );
+                      })()}
                     </div>
                     <span className="text-xs font-semibold text-white">
                       {toToken.symbol}
@@ -614,6 +639,7 @@ export default function SwapModal({
                                     t.address === fromTokenAddress
                                   : t.chainId === toChainId &&
                                     t.address === toTokenAddress;
+                              const tokenIconUrl = getTokenIconUrl(t.symbol);
                               return (
                                 <button
                                   key={`${t.chainId}-${t.address}`}
@@ -635,12 +661,22 @@ export default function SwapModal({
                                   }`}
                                 >
                                   <div
-                                    className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold border shrink-0 ${
-                                      CHAIN_COLORS[t.chainId] ??
-                                      "bg-white/10 text-gray-300 border-white/10"
+                                    className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 overflow-hidden ${
+                                      !tokenIconUrl
+                                        ? CHAIN_COLORS[t.chainId] ??
+                                          "bg-white/10 text-gray-300 border border-white/10"
+                                        : ""
                                     }`}
                                   >
-                                    {t.symbol.slice(0, 2)}
+                                    {tokenIconUrl ? (
+                                      <img
+                                        src={tokenIconUrl}
+                                        alt={t.symbol}
+                                        className="w-10 h-10 object-contain"
+                                      />
+                                    ) : (
+                                      t.symbol.slice(0, 2)
+                                    )}
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <div className="font-semibold text-white">
@@ -694,7 +730,7 @@ export default function SwapModal({
                     {quote.estimate.gasCosts
                       .map(
                         (g) =>
-                          `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(6)} ${g.token?.symbol ?? "ETH"}`,
+                          `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
                       )
                       .join(", ")}
                   </div>

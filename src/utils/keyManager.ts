@@ -76,7 +76,19 @@ const STORAGE_KEYS = {
   IMPORTED_ETH_PK_SALT: "veil:imported_eth_pk_salt",
   IMPORTED_ETH_PK_IV: "veil:imported_eth_pk_iv",
   IMPORT_TYPE: "veil:import_type",
+  /** List of Solana wallet indices that use an imported key (not derived). */
+  IMPORTED_SOLANA_INDICES: "veil:imported_solana_indices",
 } as const;
+
+function importedSolanaPkKey(index: number): string {
+  return `veil:imported_solana_pk_${index}`;
+}
+function importedSolanaSaltKey(index: number): string {
+  return `veil:imported_solana_salt_${index}`;
+}
+function importedSolanaIvKey(index: number): string {
+  return `veil:imported_solana_iv_${index}`;
+}
 
 const EVM_NETWORKS: NetworkType[] = ["ethereum", "avalanche", "arbitrum"];
 function evmCanonical(network: NetworkType): NetworkType {
@@ -126,36 +138,54 @@ export function validatePrivateKey(privateKey: string): boolean {
     return true;
   if (/^[0-9a-fA-F]{64}$/.test(trimmed)) return true;
 
-  // Solana: base58 or byte array
+  // Solana: base58 or byte array (64 or 32 bytes; 65/33 with version byte allowed)
   try {
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       const bytes = JSON.parse(trimmed);
       if (!Array.isArray(bytes)) return false;
-      return bytes.length === 64 || bytes.length === 32;
+      const len = bytes.length;
+      return len === 64 || len === 32 || len === 65 || len === 33;
     }
     const decoded = bs58.decode(trimmed);
-    return decoded.length === 64 || decoded.length === 32;
+    const len = decoded.length;
+    return len === 64 || len === 32 || len === 65 || len === 33;
   } catch {
     return false;
   }
 }
 
 /**
- * Convert private key string to Keypair
+ * Normalize secret key bytes for Solana Keypair.fromSecretKey.
+ * Expects 64 bytes (seed+public) or 32 bytes (seed only). Handles extra version byte if present.
+ */
+function normalizeSolanaSecretKey(bytes: Uint8Array): Uint8Array {
+  if (bytes.length === 64 || bytes.length === 32) return bytes;
+  if (bytes.length === 65) return bytes.slice(0, 64); // drop trailing version byte if present
+  if (bytes.length === 33) return bytes.slice(1, 33);  // drop leading version byte
+  throw new Error(
+    `Invalid Solana secret key length: ${bytes.length} (expected 32 or 64 bytes)`
+  );
+}
+
+/**
+ * Convert private key string to Keypair (Phantom / Solana standard).
+ * Supports: base58 (64 or 32 bytes), JSON array [n,n,...].
  */
 export function privateKeyToKeypair(privateKey: string): Keypair {
-  const trimmed = privateKey.trim();
+  const trimmed = privateKey.trim().replace(/\s/g, "");
 
-  // Try to parse as JSON array (byte array format)
+  // JSON array format (e.g. from Solana CLI or some exports)
   if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
     const bytes = JSON.parse(trimmed);
-    const secretKey = new Uint8Array(bytes);
+    const arr = new Uint8Array(bytes);
+    const secretKey = normalizeSolanaSecretKey(arr);
     return Keypair.fromSecretKey(secretKey);
   }
 
-  // Parse as base58 string (Phantom export format)
+  // Base58 (Phantom export format)
   const decoded = bs58.decode(trimmed);
-  return Keypair.fromSecretKey(new Uint8Array(decoded));
+  const secretKey = normalizeSolanaSecretKey(new Uint8Array(decoded));
+  return Keypair.fromSecretKey(secretKey);
 }
 
 /**
@@ -251,7 +281,7 @@ export async function storeImportedEthereumPrivateKey(
 }
 
 /**
- * Get the imported private key keypair (for index 0) — Solana only
+ * Get the imported private key keypair (for index 0) — Solana only (legacy)
  */
 export async function getImportedKeypair(
   password: string
@@ -281,6 +311,68 @@ export async function getImportedKeypair(
     return Keypair.fromSecretKey(secretKey);
   } catch (error) {
     console.error("[Veil] Error decrypting imported keypair:", error);
+    return null;
+  }
+}
+
+/**
+ * Store an imported Solana private key for a specific wallet index.
+ * Allows multiple imported Solana wallets (e.g. index 0 derived, index 1 imported).
+ */
+export async function storeImportedSolanaKeyForIndex(
+  privateKey: string,
+  password: string,
+  index: number
+): Promise<void> {
+  const keypair = privateKeyToKeypair(privateKey);
+  const secretKeyHex = uint8ArrayToHex(keypair.secretKey);
+  const { encrypted, salt, iv } = await encrypt(secretKeyHex, password);
+
+  const indicesResult = await chrome.storage.local.get(
+    STORAGE_KEYS.IMPORTED_SOLANA_INDICES,
+  );
+  const indices: number[] =
+    Array.isArray(indicesResult[STORAGE_KEYS.IMPORTED_SOLANA_INDICES])
+      ? indicesResult[STORAGE_KEYS.IMPORTED_SOLANA_INDICES]
+      : [];
+  if (!indices.includes(index)) {
+    indices.push(index);
+    indices.sort((a, b) => a - b);
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.IMPORTED_SOLANA_INDICES]: indices,
+    });
+  }
+
+  await chrome.storage.local.set({
+    [importedSolanaPkKey(index)]: encrypted,
+    [importedSolanaSaltKey(index)]: salt,
+    [importedSolanaIvKey(index)]: iv,
+  });
+}
+
+/**
+ * Get imported Solana keypair for a given index, if one is stored.
+ */
+export async function getImportedSolanaKeypairForIndex(
+  password: string,
+  index: number
+): Promise<Keypair | null> {
+  const result = await chrome.storage.local.get([
+    importedSolanaPkKey(index),
+    importedSolanaSaltKey(index),
+    importedSolanaIvKey(index),
+  ]);
+  const encrypted = result[importedSolanaPkKey(index)];
+  const salt = result[importedSolanaSaltKey(index)];
+  const iv = result[importedSolanaIvKey(index)];
+  if (!encrypted || !salt || !iv) return null;
+
+  try {
+    const secretKeyHex = await decrypt(encrypted, salt, iv, password);
+    const secretKey = hexToUint8Array(secretKeyHex);
+    return Keypair.fromSecretKey(secretKey);
+  } catch (error) {
+    console.error("[Veil] Error decrypting imported Solana key for index", index, error);
     return null;
   }
 }
@@ -600,15 +692,18 @@ export function recoverBurnerKeypair(seed: Uint8Array, index: number): Keypair {
 }
 
 /**
- * Get Solana keypair for a wallet index
+ * Get Solana keypair for a wallet index.
+ * Checks per-index imported key first, then legacy index-0 imported, then derives from seed.
  */
 export async function getKeypairForIndex(
   password: string,
   index: number
 ): Promise<Keypair> {
+  const perIndex = await getImportedSolanaKeypairForIndex(password, index);
+  if (perIndex) return perIndex;
   if (index === 0) {
-    const importedKeypair = await getImportedKeypair(password);
-    if (importedKeypair) return importedKeypair;
+    const legacy = await getImportedKeypair(password);
+    if (legacy) return legacy;
   }
   const seed = await getDecryptedSeed(password);
   return deriveKeypairFromSeed(seed, index);

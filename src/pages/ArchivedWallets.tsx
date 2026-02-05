@@ -172,7 +172,7 @@ const ArchivedWallets = () => {
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-semibold text-white">
-                      {wallet.balance.toFixed(4)} SOL
+                      {wallet.balance.toFixed(3)} SOL
                     </p>
                     <p className="text-xs text-gray-500">
                       ≈ ${(wallet.balance * 145).toFixed(2)}

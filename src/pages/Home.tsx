@@ -14,6 +14,7 @@ import {
   Copy,
   Globe,
   History,
+  Key,
   Plus,
   RefreshCw,
   Send,
@@ -26,6 +27,7 @@ import { useNavigate } from "react-router-dom";
 import ComingSoonModal from "../components/ComingSoonModal";
 import ConnectionApproval from "../components/ConnectionApproval";
 import DepositModal from "../components/DepositModal";
+import ImportWalletModal from "../components/ImportWalletModal";
 import SendPrivatelyModal from "../components/SendPrivatelyModal";
 import SignApproval from "../components/SignApproval";
 import SwapModal from "../components/SwapModal";
@@ -33,6 +35,7 @@ import TransferModal from "../components/TransferModal";
 import UnlockWallet from "../components/UnlockWallet";
 import WithdrawModal from "../components/WithdrawModal";
 import type { CheckBalancesResponse, NetworkType } from "../types";
+import { getAlchemyPrice } from "../utils/alchemyPrices";
 import { getErrorMessage, logError } from "../utils/errorHandler";
 import {
   getArbitrumBalance,
@@ -45,9 +48,6 @@ import {
   getRpcManagerForChainId,
   weiToEth,
 } from "../utils/ethRpcManager";
-import { getAlchemyPrice } from "../utils/alchemyPrices";
-import { getRpcUrlForChain, LIFI_TOKENS_BY_CHAIN } from "../utils/lifi";
-import type { LifiQuote } from "../utils/lifi";
 import {
   generateBurnerKeypair,
   getDecryptedSeed,
@@ -55,6 +55,8 @@ import {
   getKeypairForIndex,
   hasWallet,
 } from "../utils/keyManager";
+import type { LifiQuote } from "../utils/lifi";
+import { getRpcUrlForChain, LIFI_TOKENS_BY_CHAIN } from "../utils/lifi";
 import { sendMessage } from "../utils/messaging";
 import { getPrivacyCashService } from "../utils/privacyCashService";
 import { createRPCManager } from "../utils/rpcManager";
@@ -86,6 +88,7 @@ import {
   type PendingConnectionRequest,
   type PendingSignRequest,
 } from "../utils/storage";
+import { getTokenIconUrl } from "../utils/tokenIcons";
 import {
   generateTransactionId,
   storeTransaction,
@@ -114,6 +117,8 @@ const Home = () => {
   const [showSendPrivatelyModal, setShowSendPrivatelyModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showSwapModal, setShowSwapModal] = useState(false);
+  const [showNetworkPopup, setShowNetworkPopup] = useState(false);
+  const [showImportWalletModal, setShowImportWalletModal] = useState(false);
   const [showComingSoonModal, setShowComingSoonModal] = useState(false);
   const [comingSoonFeature, setComingSoonFeature] =
     useState<string>("This feature");
@@ -141,10 +146,57 @@ const Home = () => {
       const net = network ?? activeNetwork;
       try {
         let wallets = await getAllBurnerWallets(net);
-        if (
-          (net === "avalanche" || net === "arbitrum") &&
-          wallets.length > 0
-        ) {
+        if (wallets.length === 0) {
+          setBurnerWallets(wallets);
+          setActiveWallet(null);
+          return;
+        }
+        if (net === "solana") {
+          const rpcManager = createRPCManager();
+          wallets = await Promise.all(
+            wallets.map(async (w) => {
+              try {
+                const balance = await rpcManager.executeWithRetry(
+                  async (connection) => {
+                    const lamports = await connection.getBalance(
+                      new PublicKey(w.fullAddress),
+                    );
+                    return lamports / 1e9;
+                  },
+                );
+                const updated = { ...w, balance };
+                await storeBurnerWallet(updated);
+                return updated;
+              } catch (err) {
+                console.warn(
+                  "[Veil] Failed to fetch SOL balance for",
+                  w.address,
+                  err,
+                );
+                return w;
+              }
+            }),
+          );
+        } else if (net === "ethereum") {
+          wallets = await Promise.all(
+            wallets.map(async (w) => {
+              try {
+                const wei = await getEthBalance(w.fullAddress);
+                const balance = weiToEth(wei);
+                const updated = { ...w, balance };
+                await storeBurnerWallet(updated);
+                return updated;
+              } catch (err) {
+                console.warn(
+                  "[Veil] Failed to fetch ETH balance for",
+                  w.address,
+                  err,
+                );
+                return w;
+              }
+            }),
+          );
+        } else if (net === "avalanche" || net === "arbitrum") {
           const chainBalance = async (addr: string): Promise<number> => {
             if (net === "avalanche") {
               const wei = await getAvalancheBalance(addr);
@@ -157,21 +209,17 @@ const Home = () => {
             wallets.map(async (w) => ({
               ...w,
               balance: await chainBalance(w.fullAddress),
-            }))
+            })),
           );
         }
         setBurnerWallets(wallets);
-        if (wallets.length > 0) {
-          const active = wallets.find((w) => w.isActive) || wallets[0];
-          setActiveWallet(active);
-        } else {
-          setActiveWallet(null);
-        }
+        const active = wallets.find((w) => w.isActive) || wallets[0];
+        setActiveWallet(active ?? null);
       } catch (error) {
         console.error("[Veil] Error loading wallets:", error);
       }
     },
-    [activeNetwork]
+    [activeNetwork],
   );
 
   const switchNetwork = useCallback(
@@ -180,7 +228,7 @@ const Home = () => {
       await setActiveNetwork(network);
       await loadWallets(network);
     },
-    [loadWallets]
+    [loadWallets],
   );
 
   // Load connected sites
@@ -216,7 +264,7 @@ const Home = () => {
       await storeConnectionApproval(
         pendingConnection.id,
         true,
-        activeWallet.fullAddress
+        activeWallet.fullAddress,
       );
       setPendingConnection(null);
       // Reload connected sites after approval
@@ -289,7 +337,7 @@ const Home = () => {
         console.error("[Veil] Error disconnecting site:", error);
       }
     },
-    [loadConnectedSites]
+    [loadConnectedSites],
   );
 
   const generateNewBurner = useCallback(
@@ -316,11 +364,12 @@ const Home = () => {
       try {
         const existingWallets = await getAllBurnerWallets(net);
         const activeWallets = existingWallets.filter(
-          (w) => w.isActive && !w.archived
+          (w) => w.isActive && !w.archived,
         );
         const minBalance = net === "solana" ? 0.001 : 0.0001;
 
         for (const wallet of activeWallets) {
+          if (wallet.site === "Imported Wallet") continue;
           if (wallet.balance < minBalance) {
             await archiveBurnerWallet(wallet.index, wallet.network);
           }
@@ -392,7 +441,7 @@ const Home = () => {
         setIsGenerating(false);
       }
     },
-    [password, loadWallets, activeNetwork]
+    [password, loadWallets, activeNetwork],
   );
 
   const checkWalletState = useCallback(async () => {
@@ -445,9 +494,10 @@ const Home = () => {
 
         await loadWallets(net);
 
-        const wallets = await getAllBurnerWallets(net);
-        if (wallets.length === 0 && !isGenerating) {
-          // Try to get password from state or sessionStorage
+        const allWallets = await getAllBurnerWallets();
+        const walletsForNet = await getAllBurnerWallets(net);
+        if (allWallets.length === 0 && !isGenerating) {
+          // Initial onboarding: create one EVM and one Solana burner
           const currentPassword =
             password ||
             sessionStorage.getItem("veil:session_password") ||
@@ -456,11 +506,23 @@ const Home = () => {
             if (!password) {
               setPassword(currentPassword);
             }
-            await generateNewBurner(currentPassword, net);
+            await generateNewBurner(currentPassword, "ethereum");
+            await generateNewBurner(currentPassword, "solana");
+            await loadWallets(net);
           } else {
             // No password available - lock wallet gracefully
             setIsLocked(true);
             sessionStorage.removeItem("veil:session_password");
+          }
+        } else if (walletsForNet.length === 0 && !isGenerating) {
+          // Current network has no wallets (e.g. after archive), create one
+          const currentPassword =
+            password ||
+            sessionStorage.getItem("veil:session_password") ||
+            sessionStorage.getItem("veil:temp_password");
+          if (currentPassword) {
+            if (!password) setPassword(currentPassword);
+            await generateNewBurner(currentPassword, net);
           }
         }
       } else {
@@ -590,11 +652,12 @@ const Home = () => {
       await loadWallets();
       await loadConnectedSites();
 
-      // Auto-generate first burner if none exist
+      // Auto-generate first burners if none exist (one EVM, one Solana)
       const wallets = await getAllBurnerWallets();
       if (wallets.length === 0) {
-        // Generate burner - errors will be handled gracefully inside
-        await generateNewBurner(unlockPassword);
+        await generateNewBurner(unlockPassword, "ethereum");
+        await generateNewBurner(unlockPassword, "solana");
+        await loadWallets(activeNetwork);
       }
 
       // Check for pending connection requests immediately
@@ -614,7 +677,26 @@ const Home = () => {
     }
   };
 
-  const totalBalance = burnerWallets.reduce((sum, w) => sum + w.balance, 0);
+  const totalBalance = activeWallet?.balance ?? 0;
+
+  const totalNativeUsd =
+    totalBalance *
+    (activeNetwork === "solana"
+      ? (solPrice ?? 145)
+      : activeNetwork === "avalanche"
+        ? (avaxPrice ?? 35)
+        : (ethPrice ?? 2400));
+  const totalTokenUsd =
+    activeNetwork === "ethereum" ||
+    activeNetwork === "avalanche" ||
+    activeNetwork === "arbitrum"
+      ? evmTokenBalances.reduce(
+          (sum, t) =>
+            sum + (t.symbol === "USDC" || t.symbol === "USDT" ? t.balance : 0),
+          0,
+        )
+      : 0;
+  const totalBalanceUsd = totalNativeUsd + totalTokenUsd;
 
   const handleCopy = () => {
     if (activeWallet) {
@@ -670,7 +752,7 @@ const Home = () => {
           // Use getKeypairForIndex to handle private key imports correctly
           const keypair = await getKeypairForIndex(
             currentPassword,
-            activeWalletIndex
+            activeWalletIndex,
           );
           const newPubKey = keypair.publicKey.toBase58();
 
@@ -710,12 +792,10 @@ const Home = () => {
   }, [isLocked, activeWalletIndex, password, privacyCashMode]);
 
   // Periodically refresh balances and check for incoming SOL
-  // Only depend on activeWalletIndex to prevent re-triggering loops
   useEffect(() => {
     if (!isLocked && activeWalletIndex !== undefined) {
       let isMounted = true;
 
-      // Balance check function
       const checkBalances = async () => {
         if (!isMounted) return;
 
@@ -731,15 +811,15 @@ const Home = () => {
             "updates" in response &&
             response.updates
           ) {
-            // Only update the wallet list, don't change active wallet
-            const updatedWallets = await getAllBurnerWallets();
+            // Reload wallets for current network only (avoid mixing networks)
+            const updatedWallets = await getAllBurnerWallets(activeNetwork);
             if (!isMounted) return;
 
             setBurnerWallets(updatedWallets);
 
-            // Update active wallet balance only (same index)
             const updatedActiveWallet = updatedWallets.find(
-              (w) => w.index === activeWalletIndex
+              (w) =>
+                w.network === activeNetwork && w.index === activeWalletIndex,
             );
             if (updatedActiveWallet) {
               setActiveWallet(updatedActiveWallet);
@@ -750,10 +830,8 @@ const Home = () => {
         }
       };
 
-      // Check immediately
       checkBalances();
 
-      // Then check at configured interval (default 30 seconds)
       const envInterval = import.meta.env.VITE_BALANCE_CHECK_INTERVAL_MS
         ? parseInt(import.meta.env.VITE_BALANCE_CHECK_INTERVAL_MS, 10)
         : 30000;
@@ -765,7 +843,7 @@ const Home = () => {
         clearInterval(interval);
       };
     }
-  }, [isLocked, activeWalletIndex]);
+  }, [isLocked, activeWalletIndex, activeNetwork]);
 
   // Fetch USDC and other supported token balances for EVM chains
   useEffect(() => {
@@ -777,10 +855,11 @@ const Home = () => {
       setEvmTokenBalances([]);
       return;
     }
-    const chainId = net === "arbitrum" ? 42161 : net === "avalanche" ? 43114 : 1;
+    const chainId =
+      net === "arbitrum" ? 42161 : net === "avalanche" ? 43114 : 1;
     const tokens = LIFI_TOKENS_BY_CHAIN[chainId] ?? [];
     const erc20Tokens = tokens.filter(
-      (t) => t.address !== "0x0000000000000000000000000000000000000000"
+      (t) => t.address !== "0x0000000000000000000000000000000000000000",
     );
     if (erc20Tokens.length === 0) {
       setEvmTokenBalances([]);
@@ -793,11 +872,10 @@ const Home = () => {
       Promise.race([
         p,
         new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error("RPC timeout")), RPC_TIMEOUT_MS)
+          setTimeout(() => rej(new Error("RPC timeout")), RPC_TIMEOUT_MS),
         ),
       ]);
-    const delay = (ms: number) =>
-      new Promise<void>((r) => setTimeout(r, ms));
+    const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     (async () => {
       const arr: {
@@ -811,10 +889,15 @@ const Home = () => {
         const t = erc20Tokens[i]!;
         try {
           const raw = await withTimeout(
-            getErc20Balance(manager, t.address, activeWallet!.fullAddress)
+            getErc20Balance(manager, t.address, activeWallet!.fullAddress),
           );
           const balance = Number(raw) / 10 ** t.decimals;
-          arr.push({ symbol: t.symbol, balance, decimals: t.decimals, name: t.name });
+          arr.push({
+            symbol: t.symbol,
+            balance,
+            decimals: t.decimals,
+            name: t.name,
+          });
         } catch {
           arr.push({
             symbol: t.symbol,
@@ -854,7 +937,7 @@ const Home = () => {
       }
       await chrome.storage.local.remove("veil:temp_session_password");
       throw new Error(
-        "Session expired. Please close this dialog, unlock your wallet, and try again."
+        "Session expired. Please close this dialog, unlock your wallet, and try again.",
       );
     }
 
@@ -870,7 +953,7 @@ const Home = () => {
         // Check chrome.storage.session
         try {
           const sessionData = await chrome.storage.session.get(
-            "veil:session_password"
+            "veil:session_password",
           );
           if (sessionData["veil:session_password"]) {
             currentPassword = sessionData["veil:session_password"] as string;
@@ -895,7 +978,7 @@ const Home = () => {
       if (!currentPassword) {
         try {
           const localData = await chrome.storage.local.get(
-            "veil:temp_session_password"
+            "veil:temp_session_password",
           );
           if (localData["veil:temp_session_password"]) {
             currentPassword = localData["veil:temp_session_password"] as string;
@@ -920,7 +1003,7 @@ const Home = () => {
       }
       await chrome.storage.local.remove("veil:temp_session_password");
       throw new Error(
-        "Session expired. Please close this dialog, unlock your wallet, and try again."
+        "Session expired. Please close this dialog, unlock your wallet, and try again.",
       );
     }
 
@@ -947,7 +1030,7 @@ const Home = () => {
       if (!service.isInitialized()) {
         const keypair = await getKeypairForIndex(
           currentPassword,
-          activeWallet.index
+          activeWallet.index,
         );
         await service.initialize(keypair);
       }
@@ -1002,7 +1085,7 @@ const Home = () => {
   // Withdraw handler using real Privacy Cash service
   const handleWithdraw = async (
     amount: number,
-    recipient?: string
+    recipient?: string,
   ): Promise<void> => {
     if (!privacyCashMode) {
       throw new Error("Privacy Cash mode is not enabled");
@@ -1024,7 +1107,7 @@ const Home = () => {
       }
       await chrome.storage.local.remove("veil:temp_session_password");
       throw new Error(
-        "Session expired. Please close this dialog, unlock your wallet, and try again."
+        "Session expired. Please close this dialog, unlock your wallet, and try again.",
       );
     }
 
@@ -1040,7 +1123,7 @@ const Home = () => {
         // Check chrome.storage.session
         try {
           const sessionData = await chrome.storage.session.get(
-            "veil:session_password"
+            "veil:session_password",
           );
           if (sessionData["veil:session_password"]) {
             currentPassword = sessionData["veil:session_password"] as string;
@@ -1065,7 +1148,7 @@ const Home = () => {
       if (!currentPassword) {
         try {
           const localData = await chrome.storage.local.get(
-            "veil:temp_session_password"
+            "veil:temp_session_password",
           );
           if (localData["veil:temp_session_password"]) {
             currentPassword = localData["veil:temp_session_password"] as string;
@@ -1090,7 +1173,7 @@ const Home = () => {
       }
       await chrome.storage.local.remove("veil:temp_session_password");
       throw new Error(
-        "Session expired. Please close this dialog, unlock your wallet, and try again."
+        "Session expired. Please close this dialog, unlock your wallet, and try again.",
       );
     }
 
@@ -1124,11 +1207,11 @@ const Home = () => {
       // Ensure service is initialized
       if (!service.isInitialized()) {
         console.log(
-          "[Veil] Service not initialized, initializing for withdraw..."
+          "[Veil] Service not initialized, initializing for withdraw...",
         );
         const keypair = await getKeypairForIndex(
           currentPassword,
-          activeWallet.index
+          activeWallet.index,
         );
         await service.initialize(keypair);
       }
@@ -1189,7 +1272,7 @@ const Home = () => {
   // This is always available as a main action button (doesn't require privacy cash mode toggle)
   const handleSendPrivately = async (
     amount: number,
-    recipient?: string
+    recipient?: string,
   ): Promise<void> => {
     console.log("[Veil] handleSendPrivately called with:", {
       amount,
@@ -1231,7 +1314,7 @@ const Home = () => {
     let currentPassword = password;
     console.log(
       "[Veil] Password from state:",
-      currentPassword ? "exists" : "null"
+      currentPassword ? "exists" : "null",
     );
 
     if (!currentPassword) {
@@ -1239,7 +1322,7 @@ const Home = () => {
       const sessionPassword = sessionStorage.getItem("veil:session_password");
       console.log(
         "[Veil] Session password (sessionStorage):",
-        sessionPassword ? "exists" : "null"
+        sessionPassword ? "exists" : "null",
       );
       if (sessionPassword) {
         currentPassword = sessionPassword;
@@ -1248,12 +1331,12 @@ const Home = () => {
         // Check chrome.storage.session
         try {
           const sessionData = await chrome.storage.session.get(
-            "veil:session_password"
+            "veil:session_password",
           );
           if (sessionData["veil:session_password"]) {
             currentPassword = sessionData["veil:session_password"] as string;
             console.log(
-              "[Veil] Session password (chrome.storage.session): exists"
+              "[Veil] Session password (chrome.storage.session): exists",
             );
             setPassword(currentPassword);
             // Also sync to sessionStorage for consistency
@@ -1269,7 +1352,7 @@ const Home = () => {
         const tempPassword = sessionStorage.getItem("veil:temp_password");
         console.log(
           "[Veil] Temp password (sessionStorage):",
-          tempPassword ? "exists" : "null"
+          tempPassword ? "exists" : "null",
         );
         if (tempPassword) {
           currentPassword = tempPassword;
@@ -1281,7 +1364,7 @@ const Home = () => {
       if (!currentPassword) {
         try {
           const localData = await chrome.storage.local.get(
-            "veil:temp_session_password"
+            "veil:temp_session_password",
           );
           if (localData["veil:temp_session_password"]) {
             currentPassword = localData["veil:temp_session_password"] as string;
@@ -1300,7 +1383,7 @@ const Home = () => {
       // Password not available - need to re-unlock
       console.error("[Veil] No password available!");
       throw new Error(
-        "Session expired. Please close this dialog, unlock your wallet, and try again."
+        "Session expired. Please close this dialog, unlock your wallet, and try again.",
       );
     }
     console.log("[Veil] Password obtained successfully");
@@ -1337,7 +1420,7 @@ const Home = () => {
         console.log("[Veil] Service not initialized, initializing...");
         const keypair = await getKeypairForIndex(
           currentPassword,
-          activeWallet.index
+          activeWallet.index,
         );
         await service.initialize(keypair);
       }
@@ -1349,7 +1432,7 @@ const Home = () => {
         lamports,
         "lamports (",
         amount,
-        "SOL)"
+        "SOL)",
       );
 
       // Validate recipient address if provided
@@ -1464,7 +1547,7 @@ const Home = () => {
     // If password is not available but wallet is unlocked, just reload from storage
     if (!currentPassword) {
       console.log(
-        "[Veil] Password not available, reloading from persisted storage..."
+        "[Veil] Password not available, reloading from persisted storage...",
       );
       setIsRefreshingPrivateBalance(true);
       try {
@@ -1489,7 +1572,7 @@ const Home = () => {
         console.log("[Veil] Service not initialized, initializing now...");
         const keypair = await getKeypairForIndex(
           currentPassword,
-          activeWallet.index
+          activeWallet.index,
         );
         await service.initialize(keypair);
       }
@@ -1512,7 +1595,7 @@ const Home = () => {
 
       if (newBalance === 0) {
         console.warn(
-          "[Veil] Balance is still 0 after refresh. Check console for errors."
+          "[Veil] Balance is still 0 after refresh. Check console for errors.",
         );
       }
     } catch (error) {
@@ -1530,7 +1613,7 @@ const Home = () => {
   // Transfer handler for moving SOL between wallets
   const handleTransfer = async (
     amount: number,
-    recipient: string
+    recipient: string,
   ): Promise<string> => {
     if (!activeWallet) {
       throw new Error("No active wallet selected");
@@ -1570,7 +1653,7 @@ const Home = () => {
         // Check chrome.storage.session
         try {
           const sessionData = await chrome.storage.session.get(
-            "veil:session_password"
+            "veil:session_password",
           );
           if (sessionData["veil:session_password"]) {
             currentPassword = sessionData["veil:session_password"] as string;
@@ -1596,7 +1679,7 @@ const Home = () => {
       if (!currentPassword) {
         try {
           const localData = await chrome.storage.local.get(
-            "veil:temp_session_password"
+            "veil:temp_session_password",
           );
           if (localData["veil:temp_session_password"]) {
             currentPassword = localData["veil:temp_session_password"] as string;
@@ -1639,7 +1722,8 @@ const Home = () => {
       symbol:
         activeWallet.network === "avalanche"
           ? "AVAX"
-          : activeWallet.network === "ethereum" || activeWallet.network === "arbitrum"
+          : activeWallet.network === "ethereum" ||
+              activeWallet.network === "arbitrum"
             ? "ETH"
             : "SOL",
     };
@@ -1654,10 +1738,9 @@ const Home = () => {
       const requiredBalance = amount + feeEstimate;
       if (activeWallet.balance < requiredBalance) {
         transaction.status = "failed";
-        const sym =
-          activeWallet.network === "avalanche" ? "AVAX" : "ETH";
+        const sym = activeWallet.network === "avalanche" ? "AVAX" : "ETH";
         transaction.error = `Insufficient balance. Need at least ${requiredBalance.toFixed(
-          6
+          6,
         )} ${sym} (including gas).`;
         await storeTransaction(transaction);
         throw new Error(transaction.error);
@@ -1665,7 +1748,7 @@ const Home = () => {
       try {
         const { privateKey } = await getEthereumWalletForIndex(
           currentPassword,
-          activeWallet.index
+          activeWallet.index,
         );
         const chainId =
           activeWallet.network === "arbitrum"
@@ -1707,7 +1790,7 @@ const Home = () => {
     if (activeWallet.balance < requiredBalance) {
       transaction.status = "failed";
       transaction.error = `Insufficient balance. You need at least ${requiredBalance.toFixed(
-        6
+        6,
       )} SOL (including transaction fees).`;
       await storeTransaction(transaction);
       throw new Error(transaction.error);
@@ -1717,7 +1800,7 @@ const Home = () => {
       const rpcManager = createRPCManager();
       const keypair = await getKeypairForIndex(
         currentPassword,
-        activeWallet.index
+        activeWallet.index,
       );
 
       console.log("[Veil] Starting transfer:", {
@@ -1745,7 +1828,7 @@ const Home = () => {
                 fromPubkey: keypair.publicKey,
                 toPubkey: recipientPubkey,
                 lamports,
-              })
+              }),
             );
 
             tx.recentBlockhash = blockhash;
@@ -1776,14 +1859,14 @@ const Home = () => {
                   blockhash,
                   lastValidBlockHeight,
                 },
-                "confirmed"
+                "confirmed",
               );
 
               // 20 second timeout for confirmation
               const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(
                   () => reject(new Error("Confirmation timeout")),
-                  20000
+                  20000,
                 );
               });
 
@@ -1803,12 +1886,12 @@ const Home = () => {
                 errorMsg.includes("block height")
               ) {
                 console.log(
-                  "[Veil] Transaction sent successfully. Confirmation timed out, but transaction is processing on-chain."
+                  "[Veil] Transaction sent successfully. Confirmation timed out, but transaction is processing on-chain.",
                 );
               } else {
                 console.log(
                   "[Veil] Transaction sent successfully. Confirmation may take longer, but transaction is processing.",
-                  errorMsg
+                  errorMsg,
                 );
               }
               // Don't throw - transaction was sent, that's success
@@ -1819,7 +1902,7 @@ const Home = () => {
             console.error("[Veil] Error in transfer step:", stepError);
             throw stepError;
           }
-        }
+        },
       );
 
       // Reload wallets to update balance
@@ -1910,7 +1993,7 @@ const Home = () => {
         } else {
           try {
             const sessionData = await chrome.storage.session.get(
-              "veil:session_password"
+              "veil:session_password",
             );
             if (sessionData["veil:session_password"]) {
               currentPassword = sessionData["veil:session_password"] as string;
@@ -1927,10 +2010,12 @@ const Home = () => {
         if (!currentPassword) {
           try {
             const localData = await chrome.storage.local.get(
-              "veil:temp_session_password"
+              "veil:temp_session_password",
             );
             if (localData["veil:temp_session_password"]) {
-              currentPassword = localData["veil:temp_session_password"] as string;
+              currentPassword = localData[
+                "veil:temp_session_password"
+              ] as string;
               setPassword(currentPassword);
             }
           } catch {
@@ -1943,14 +2028,18 @@ const Home = () => {
       }
       const { privateKey } = await getEthereumWalletForIndex(
         currentPassword,
-        activeWallet.index
+        activeWallet.index,
       );
       const chainId = quote.transactionRequest.chainId;
       const fromTokenAddress = quote.action.fromToken.address;
       const fromAmount = quote.action.fromAmount;
       const approvalAddress = quote.estimate.approvalAddress;
       const networkForTx: NetworkType =
-        chainId === 43114 ? "avalanche" : chainId === 42161 ? "arbitrum" : "ethereum";
+        chainId === 43114
+          ? "avalanche"
+          : chainId === 42161
+            ? "arbitrum"
+            : "ethereum";
       const swapTxId = generateTransactionId();
       const swapTransaction: TransactionRecord = {
         id: swapTxId,
@@ -1978,10 +2067,13 @@ const Home = () => {
             const erc20 = new Contract(fromTokenAddress, ERC20_ABI, wallet);
             const allowance = await erc20.allowance(
               await wallet.getAddress(),
-              approvalAddress
+              approvalAddress,
             );
             if (BigInt(allowance.toString()) < BigInt(fromAmount)) {
-              const approveTx = await erc20.approve(approvalAddress, fromAmount);
+              const approveTx = await erc20.approve(
+                approvalAddress,
+                fromAmount,
+              );
               await approveTx.wait();
             }
           }
@@ -2012,12 +2104,7 @@ const Home = () => {
         throw err;
       }
     },
-    [
-      activeWallet,
-      password,
-      activeNetwork,
-      loadWallets,
-    ]
+    [activeWallet, password, activeNetwork, loadWallets],
   );
 
   const getBalanceForChain = useCallback(
@@ -2038,7 +2125,7 @@ const Home = () => {
       }
       return 0;
     },
-    [activeWallet?.fullAddress]
+    [activeWallet?.fullAddress],
   );
 
   const refetchBalancesForSwap = useCallback(async () => {
@@ -2048,7 +2135,7 @@ const Home = () => {
       setBurnerWallets(updatedWallets);
       if (activeWallet) {
         const updated = updatedWallets.find(
-          (w) => w.index === activeWallet.index
+          (w) => w.index === activeWallet.index,
         );
         if (updated) setActiveWallet(updated);
       }
@@ -2178,62 +2265,6 @@ const Home = () => {
 
       {/* Main Content */}
       <div className="flex-1 px-3 pt-2 pb-3 z-10 flex flex-col overflow-y-auto">
-        {/* Network switcher – minimal bar above balance (one EVM at a time + Solana) */}
-        <div
-          role="tablist"
-          aria-label="Network"
-          className="flex rounded-lg bg-white/[0.04] border border-white/[0.06] p-0.5 mb-3"
-        >
-          <button
-            role="tab"
-            aria-selected={activeNetwork === "ethereum"}
-            onClick={() => switchNetwork("ethereum")}
-            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
-              activeNetwork === "ethereum"
-                ? "bg-white/10 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            Ethereum
-          </button>
-          <button
-            role="tab"
-            aria-selected={activeNetwork === "avalanche"}
-            onClick={() => switchNetwork("avalanche")}
-            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
-              activeNetwork === "avalanche"
-                ? "bg-white/10 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            Avalanche
-          </button>
-          <button
-            role="tab"
-            aria-selected={activeNetwork === "arbitrum"}
-            onClick={() => switchNetwork("arbitrum")}
-            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
-              activeNetwork === "arbitrum"
-                ? "bg-white/10 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            Arbitrum
-          </button>
-          <button
-            role="tab"
-            aria-selected={activeNetwork === "solana"}
-            onClick={() => switchNetwork("solana")}
-            className={`flex-1 py-2 rounded-md text-xs font-medium transition-colors ${
-              activeNetwork === "solana"
-                ? "bg-white/10 text-white"
-                : "text-gray-500 hover:text-gray-300"
-            }`}
-          >
-            Solana
-          </button>
-        </div>
-
         {/* Total Balance Display */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -2241,18 +2272,10 @@ const Home = () => {
           className="text-center mt-0 mb-4"
         >
           <h1 className="text-4xl font-bold text-white mb-1">
-            $
-            {(
-              totalBalance *
-              (activeNetwork === "solana"
-                ? solPrice ?? 145
-                : activeNetwork === "avalanche"
-                  ? avaxPrice ?? 35
-                  : ethPrice ?? 2400)
-            ).toFixed(2)}
+            ${totalBalanceUsd.toFixed(2)}
           </h1>
           <p className="text-sm text-gray-400">
-            {totalBalance.toFixed(activeNetwork === "solana" ? 4 : 6)}{" "}
+            {totalBalance.toFixed(3)}{" "}
             {activeNetwork === "solana"
               ? "SOL"
               : activeNetwork === "avalanche"
@@ -2321,6 +2344,157 @@ const Home = () => {
             <h2 className="text-sm font-semibold text-white">Tokens</h2>
           </div>
 
+          {/* Network switcher – compact dropdown */}
+          <div className="relative mb-2">
+            <button
+              type="button"
+              onClick={() => setShowNetworkPopup((prev) => !prev)}
+              className="w-full flex items-center gap-2 rounded-lg bg-white/[0.04] border border-white/10 px-2.5 py-1.5 text-left hover:bg-white/[0.06] transition-colors"
+              aria-expanded={showNetworkPopup}
+              aria-haspopup="listbox"
+              aria-label="Select network"
+            >
+              <div className="w-5 h-5 rounded-full flex items-center justify-center overflow-hidden shrink-0">
+                {getTokenIconUrl(
+                  activeNetwork === "solana"
+                    ? "SOL"
+                    : activeNetwork === "avalanche"
+                      ? "AVAX"
+                      : "ETH",
+                ) ? (
+                  <img
+                    src={
+                      getTokenIconUrl(
+                        activeNetwork === "solana"
+                          ? "SOL"
+                          : activeNetwork === "avalanche"
+                            ? "AVAX"
+                            : "ETH",
+                      )!
+                    }
+                    alt=""
+                    className="w-5 h-5 object-contain"
+                  />
+                ) : (
+                  <span className="text-white font-bold text-[10px]">
+                    {activeNetwork === "solana"
+                      ? "S"
+                      : activeNetwork === "avalanche"
+                        ? "A"
+                        : "E"}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs font-medium text-white flex-1">
+                {activeNetwork === "solana"
+                  ? "Solana"
+                  : activeNetwork === "avalanche"
+                    ? "Avalanche"
+                    : activeNetwork === "arbitrum"
+                      ? "Arbitrum"
+                      : "Ethereum"}
+              </span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-gray-400 shrink-0 transition-transform ${
+                  showNetworkPopup ? "rotate-180" : ""
+                }`}
+              />
+            </button>
+
+            <AnimatePresence>
+              {showNetworkPopup && (
+                <>
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    onClick={() => setShowNetworkPopup(false)}
+                    className="fixed inset-0 z-40"
+                    aria-hidden="true"
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute left-0 right-0 top-full mt-0.5 rounded-lg bg-gray-900 border border-white/10 shadow-xl z-50 overflow-hidden"
+                    role="listbox"
+                    aria-label="Networks"
+                  >
+                    {(
+                      [
+                        ["ethereum", "Ethereum", "ETH"],
+                        ["avalanche", "Avalanche", "AVAX"],
+                        ["arbitrum", "Arbitrum", "ETH"],
+                        ["solana", "Solana", "SOL"],
+                      ] as const
+                    ).map(([net]) => (
+                      <button
+                        key={net}
+                        type="button"
+                        role="option"
+                        aria-selected={activeNetwork === net}
+                        onClick={async () => {
+                          setShowNetworkPopup(false);
+                          await switchNetwork(net);
+                        }}
+                        className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${
+                          activeNetwork === net
+                            ? "bg-white/10 text-white"
+                            : "text-gray-300 hover:bg-white/5 hover:text-white"
+                        }`}
+                      >
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center overflow-hidden shrink-0">
+                          {getTokenIconUrl(
+                            net === "solana"
+                              ? "SOL"
+                              : net === "avalanche"
+                                ? "AVAX"
+                                : "ETH",
+                          ) ? (
+                            <img
+                              src={
+                                getTokenIconUrl(
+                                  net === "solana"
+                                    ? "SOL"
+                                    : net === "avalanche"
+                                      ? "AVAX"
+                                      : "ETH",
+                                )!
+                              }
+                              alt=""
+                              className="w-5 h-5 object-contain"
+                            />
+                          ) : (
+                            <span className="text-white font-bold text-[10px]">
+                              {net === "solana"
+                                ? "S"
+                                : net === "avalanche"
+                                  ? "A"
+                                  : "E"}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs font-medium">
+                          {net === "solana"
+                            ? "Solana"
+                            : net === "avalanche"
+                              ? "Avalanche"
+                              : net === "arbitrum"
+                                ? "Arbitrum"
+                                : "Ethereum"}
+                        </span>
+                        {activeNetwork === net && (
+                          <Check className="w-3.5 h-3.5 text-emerald-400 ml-auto shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+
           {/* Native Token Card (SOL or ETH) */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -2329,32 +2503,45 @@ const Home = () => {
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center">
-                  {activeNetwork === "solana" ? (
-                    <img
-                      src={
-                        typeof chrome !== "undefined" && chrome.runtime
-                          ? chrome.runtime.getURL("solana.svg")
-                          : "/solana.svg"
-                      }
-                      alt="Solana"
-                      className="w-6 h-6 object-contain"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.display = "none";
-                        const parent = target.parentElement;
-                        if (parent && !parent.querySelector(".fallback-text")) {
-                          const fallback = document.createElement("span");
-                          fallback.className =
-                            "fallback-text text-white font-bold text-sm";
-                          fallback.textContent = "SOL";
-                          parent.appendChild(fallback);
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span className="text-white font-bold text-sm">ETH</span>
-                  )}
+                <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shrink-0">
+                  {(() => {
+                    const nativeSymbol =
+                      activeNetwork === "solana"
+                        ? "SOL"
+                        : activeNetwork === "avalanche"
+                          ? "AVAX"
+                          : "ETH";
+                    const iconUrl = getTokenIconUrl(nativeSymbol);
+                    if (iconUrl) {
+                      return (
+                        <img
+                          src={iconUrl}
+                          alt={nativeSymbol}
+                          className="w-10 h-10 object-contain"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.style.display = "none";
+                            const parent = target.parentElement;
+                            if (
+                              parent &&
+                              !parent.querySelector(".fallback-text")
+                            ) {
+                              const fallback = document.createElement("span");
+                              fallback.className =
+                                "fallback-text text-white font-bold text-sm";
+                              fallback.textContent = nativeSymbol;
+                              parent.appendChild(fallback);
+                            }
+                          }}
+                        />
+                      );
+                    }
+                    return (
+                      <span className="text-white font-bold text-sm">
+                        {nativeSymbol}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div>
                   <div className="flex items-center gap-1.5">
@@ -2370,7 +2557,7 @@ const Home = () => {
                     <Check className="w-3.5 h-3.5 text-purple-400" />
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">
-                    {totalBalance.toFixed(activeNetwork === "solana" ? 5 : 6)}{" "}
+                    {totalBalance.toFixed(3)}{" "}
                     {activeNetwork === "solana"
                       ? "SOL"
                       : activeNetwork === "avalanche"
@@ -2381,15 +2568,7 @@ const Home = () => {
               </div>
               <div className="text-right">
                 <p className="text-sm font-semibold text-white">
-                  $
-                  {(
-                    totalBalance *
-                    (activeNetwork === "solana"
-                      ? solPrice ?? 145
-                      : activeNetwork === "avalanche"
-                        ? avaxPrice ?? 35
-                        : ethPrice ?? 2400)
-                  ).toFixed(2)}
+                  ${totalBalanceUsd.toFixed(2)}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">-</p>
               </div>
@@ -2400,44 +2579,74 @@ const Home = () => {
           {(activeNetwork === "ethereum" ||
             activeNetwork === "avalanche" ||
             activeNetwork === "arbitrum") &&
-            evmTokenBalances.map((t) => (
-              <motion.div
-                key={t.symbol}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
-                      <span className="text-white font-bold text-sm">
-                        {t.symbol.slice(0, 2)}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium text-white">
-                          {t.name}
-                        </span>
+            evmTokenBalances.map((t) => {
+              const evmIconUrl = getTokenIconUrl(t.symbol);
+              return (
+                <motion.div
+                  key={t.symbol}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shrink-0 ${
+                          !evmIconUrl ? "bg-white/10" : ""
+                        }`}
+                      >
+                        {evmIconUrl ? (
+                          <img
+                            src={evmIconUrl}
+                            alt={t.symbol}
+                            className="w-10 h-10 object-contain"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.style.display = "none";
+                              const parent = target.parentElement;
+                              if (
+                                parent &&
+                                !parent.querySelector(".fallback-text")
+                              ) {
+                                const fallback = document.createElement("span");
+                                fallback.className =
+                                  "fallback-text text-white font-bold text-sm";
+                                fallback.textContent = t.symbol.slice(0, 2);
+                                parent.appendChild(fallback);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span className="text-white font-bold text-sm">
+                            {t.symbol.slice(0, 2)}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {t.balance.toFixed(t.decimals === 6 ? 2 : 6)} {t.symbol}
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium text-white">
+                            {t.name}
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {t.balance.toFixed(3)} {t.symbol}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-white">
+                        $
+                        {(t.symbol === "USDC" || t.symbol === "USDT"
+                          ? t.balance
+                          : 0
+                        ).toFixed(2)}
                       </p>
+                      <p className="text-xs text-gray-500 mt-0.5">-</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-white">
-                      $
-                      {(t.symbol === "USDC" || t.symbol === "USDT"
-                        ? t.balance
-                        : 0
-                      ).toFixed(2)}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-0.5">-</p>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
 
           {/* Private Balance Card - Solana only, when Privacy Cash mode is enabled */}
           {activeNetwork === "solana" && privacyCashMode && (
@@ -2458,7 +2667,7 @@ const Home = () => {
                       </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      {privateBalance.toFixed(5)} SOL
+                      {privateBalance.toFixed(3)} SOL
                     </p>
                   </div>
                 </div>
@@ -2609,55 +2818,62 @@ const Home = () => {
                     </div>
                     <div className="text-right">
                       <p className="text-xs font-bold text-white">
-                        {wallet.balance}{" "}
+                        {Number(wallet.balance).toFixed(3)}{" "}
                         {wallet.network === "solana"
-                        ? "SOL"
-                        : wallet.network === "avalanche"
-                          ? "AVAX"
-                          : "ETH"}
+                          ? "SOL"
+                          : wallet.network === "avalanche"
+                            ? "AVAX"
+                            : "ETH"}
                       </p>
                       <p className="text-[10px] text-gray-500">
                         $
                         {(
                           wallet.balance *
                           (wallet.network === "solana"
-                            ? solPrice ?? 145
+                            ? (solPrice ?? 145)
                             : wallet.network === "avalanche"
-                              ? avaxPrice ?? 35
-                              : ethPrice ?? 2400)
+                              ? (avaxPrice ?? 35)
+                              : (ethPrice ?? 2400))
                         ).toFixed(2)}
                       </p>
                     </div>
                   </button>
                 ))}
 
-                <button
-                  onClick={() => {
-                    setShowWalletList(false);
-                    generateNewBurner();
-                  }}
-                  disabled={isGenerating}
-                  className="w-full p-2.5 rounded-lg flex items-center gap-2.5 bg-white/5 hover:bg-white/10 border border-dashed border-white/20 transition-colors mt-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center">
-                    <Plus className="w-4 h-4 text-gray-400" />
-                  </div>
-                  <span className="text-xs font-medium text-gray-400">
-                    Create New Address
-                  </span>
-                </button>
+                <div className="flex gap-2 mt-1">
+                  <button
+                    onClick={() => {
+                      setShowWalletList(false);
+                      generateNewBurner();
+                    }}
+                    disabled={isGenerating}
+                    className="flex-1 p-2.5 rounded-lg flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 border border-dashed border-white/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4 text-gray-400 shrink-0" />
+                    <span className="text-xs font-medium text-gray-400">
+                      Create New Address
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowWalletList(false);
+                      setShowImportWalletModal(true);
+                    }}
+                    className="flex-1 p-2.5 rounded-lg flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 border border-dashed border-white/20 transition-colors"
+                  >
+                    <Key className="w-4 h-4 text-gray-400 shrink-0" />
+                    <span className="text-xs font-medium text-gray-400">
+                      Import Wallet
+                    </span>
+                  </button>
+                </div>
               </div>
 
               <div className="px-4 py-3 border-t border-white/10 bg-black/20">
                 <div className="flex justify-between items-center">
                   <span className="text-xs text-gray-500">Total Balance</span>
                   <span className="text-sm font-bold text-white">
-                    {totalBalance.toFixed(activeNetwork === "solana" ? 2 : 4)}{" "}
-                    {activeNetwork === "solana"
-                      ? "SOL"
-                      : activeNetwork === "avalanche"
-                        ? "AVAX"
-                        : "ETH"}
+                    ${totalBalanceUsd.toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -2780,11 +2996,11 @@ const Home = () => {
                 }}
               >
                 <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-black flex items-center justify-center border border-white/10">
+                  <div className="w-3 h-3 rounded-full flex items-center justify-center overflow-hidden shrink-0">
                     <img
-                      src="/solana.svg"
+                      src={getTokenIconUrl("SOL") ?? "/icons/sol.svg"}
                       alt="Solana"
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                     />
                   </div>
                   <div>
@@ -2873,29 +3089,41 @@ const Home = () => {
         (activeWallet.network === "ethereum" ||
           activeWallet.network === "avalanche" ||
           activeWallet.network === "arbitrum") && (
-        <SwapModal
-          isOpen={showSwapModal}
-          onClose={() => setShowSwapModal(false)}
-          onExecute={handleSwapExecute}
-          fromAddress={activeWallet.fullAddress}
-          availableBalanceEth={activeWallet.balance}
-          getBalanceForChain={getBalanceForChain}
-          onOpened={refetchBalancesForSwap}
-          evmNetwork={
-            activeNetwork === "arbitrum"
-              ? "arbitrum"
-              : activeNetwork === "avalanche"
-                ? "avalanche"
-                : "ethereum"
-          }
-        />
-      )}
+          <SwapModal
+            isOpen={showSwapModal}
+            onClose={() => setShowSwapModal(false)}
+            onExecute={handleSwapExecute}
+            fromAddress={activeWallet.fullAddress}
+            availableBalanceEth={activeWallet.balance}
+            getBalanceForChain={getBalanceForChain}
+            onOpened={refetchBalancesForSwap}
+            evmNetwork={
+              activeNetwork === "arbitrum"
+                ? "arbitrum"
+                : activeNetwork === "avalanche"
+                  ? "avalanche"
+                  : "ethereum"
+            }
+          />
+        )}
 
       {/* Coming Soon Modal */}
       <ComingSoonModal
         isOpen={showComingSoonModal}
         onClose={() => setShowComingSoonModal(false)}
         feature={comingSoonFeature}
+      />
+
+      <ImportWalletModal
+        isOpen={showImportWalletModal}
+        onClose={() => setShowImportWalletModal(false)}
+        onSuccess={async (network) => {
+          setActiveNetworkState(network);
+          await setActiveNetwork(network);
+          await new Promise((r) => setTimeout(r, 100));
+          await loadWallets(network);
+        }}
+        password={password}
       />
     </div>
   );

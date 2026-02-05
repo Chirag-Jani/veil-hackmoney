@@ -67,7 +67,7 @@ const PrivacyScoreDisplay = ({
           {privateBalance > 0 && (
             <>
               <span>•</span>
-              <span>{privateBalance.toFixed(2)} private</span>
+              <span>{privateBalance.toFixed(3)} private</span>
             </>
           )}
         </div>

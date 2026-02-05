@@ -153,7 +153,7 @@ const WithdrawModal = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-gray-500">Private Balance</span>
                   <span className="text-sm font-semibold text-white">
-                    {privateBalance.toFixed(4)} SOL
+                    {privateBalance.toFixed(3)} SOL
                   </span>
                 </div>
               </div>
@@ -293,7 +293,7 @@ const WithdrawModal = ({
                       <span>
                         Withdraw{" "}
                         {withdrawAmount > 0
-                          ? `${withdrawAmount.toFixed(4)} SOL`
+                          ? `${withdrawAmount.toFixed(3)} SOL`
                           : ""}
                       </span>
                     </>

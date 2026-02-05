@@ -123,7 +123,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit, availableBalance }: DepositM
               <div className="mb-4 p-3 rounded-lg bg-white/5 border border-white/10">
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-gray-500">Available Balance</span>
-                  <span className="text-sm font-semibold text-white">{availableBalance.toFixed(4)} SOL</span>
+                  <span className="text-sm font-semibold text-white">{availableBalance.toFixed(3)} SOL</span>
                 </div>
               </div>
 
@@ -191,7 +191,7 @@ const DepositModal = ({ isOpen, onClose, onDeposit, availableBalance }: DepositM
                   ) : (
                     <>
                       <Shield className="w-4 h-4" />
-                      <span>Deposit {depositAmount > 0 ? `${depositAmount.toFixed(4)} SOL` : ''}</span>
+                      <span>Deposit {depositAmount > 0 ? `${depositAmount.toFixed(3)} SOL` : ''}</span>
                     </>
                   )}
                 </button>

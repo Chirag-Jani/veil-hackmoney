@@ -58,7 +58,10 @@ export class RPCManager {
 
   getConnection(url: string): Connection {
     if (!this.connectionCache.has(url)) {
-      this.connectionCache.set(url, new Connection(url, "confirmed"));
+      this.connectionCache.set(
+        url,
+        new Connection(url, { commitment: "confirmed" })
+      );
     }
     return this.connectionCache.get(url)!;
   }

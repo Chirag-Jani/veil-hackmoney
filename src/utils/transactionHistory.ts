@@ -117,16 +117,8 @@ export function generateTransactionId(): string {
  * Format transaction amount for display
  */
 export function formatTransactionAmount(amount: number): string {
-  if (amount < 0.000001) {
-    return '< 0.000001';
-  }
-  if (amount < 0.01) {
-    return amount.toFixed(6);
-  }
-  if (amount < 1) {
-    return amount.toFixed(4);
-  }
-  return amount.toFixed(2);
+  if (amount < 0.001 && amount > 0) return '< 0.001';
+  return amount.toFixed(3);
 }
 
 /**
