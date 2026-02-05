@@ -8,6 +8,7 @@ import {
   getActiveBurnerWallet,
   signMessageWithActiveWallet,
 } from "../utils/solanaProvider";
+import { lockWallet } from "../utils/walletLock";
 import {
   isSiteConnected,
   storeConnectedSite,
@@ -219,6 +220,7 @@ onMessageType("providerRequest", async (message, sender) => {
 
     const isEthereumMethod =
       method === "net_version" ||
+      method === "personal_sign" ||
       (typeof method === "string" &&
         (method.startsWith("eth_") || method.startsWith("wallet_")));
 
@@ -450,6 +452,7 @@ onMessageType("providerRequest", async (message, sender) => {
         }
         const password = await getSessionPassword();
         if (!password) {
+          await lockWallet();
           return {
             success: false,
             error: { code: -32002, message: "Session expired. Please unlock your wallet again." },
@@ -638,6 +641,7 @@ onMessageType("providerRequest", async (message, sender) => {
     // Get password
     const password = await getSessionPassword();
     if (!password && method !== 'getAccount' && method !== 'disconnect') {
+      await lockWallet();
       return {
         success: false,
         error: { code: -32002, message: "Session expired. Please unlock your wallet again." },

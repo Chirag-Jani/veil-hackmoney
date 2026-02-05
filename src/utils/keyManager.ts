@@ -160,6 +160,7 @@ export function privateKeyToKeypair(privateKey: string): Keypair {
  */
 export function privateKeyToSeed(privateKey: string): Uint8Array {
   const keypair = privateKeyToKeypair(privateKey);
+  // Use the secret key seed (first 32 bytes) and pad to 64 bytes for HD derivation
   const seedPart = keypair.secretKey.slice(0, 32);
   return expandSeedTo64(seedPart);
 }
