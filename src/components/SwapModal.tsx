@@ -7,10 +7,22 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  addRecentEnsName,
+  formatPresetDescription,
+  getRecentEnsNames,
+  getVeilPreferences,
+  PRESET_ENS_CONFIGS,
+} from "../utils/ens";
 import { getErrorMessage } from "../utils/errorHandler";
-import { getTokenIconUrl } from "../utils/tokenIcons";
-import type { LifiChainId } from "../utils/lifi";
 import {
   getChainById,
   getLifiQuote,
@@ -18,9 +30,11 @@ import {
   getTokensForChain,
   LIFI_CHAINS,
   LIFI_TOKENS_BY_CHAIN,
+  type LifiChainId,
   type LifiQuote,
   type LifiRoute,
 } from "../utils/lifi";
+import { getTokenIconUrl } from "../utils/tokenIcons";
 
 type TokenWithChain = {
   chainId: number;
@@ -148,6 +162,16 @@ export default function SwapModal({
   const [tokenSelectorSearch, setTokenSelectorSearch] = useState("");
   const [displayBalance, setDisplayBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
+  const [ensPreferencesName, setEnsPreferencesName] = useState("");
+  const [ensPreferencesLoading, setEnsPreferencesLoading] = useState(false);
+  const [ensPreferencesError, setEnsPreferencesError] = useState<string | null>(
+    null,
+  );
+  const [ensPreferencesLoaded, setEnsPreferencesLoaded] = useState<
+    string | null
+  >(null);
+  const [recentEnsNames, setRecentEnsNames] = useState<string[]>([]);
+  const [ensDropdownOpen, setEnsDropdownOpen] = useState(false);
 
   const allTokensWithChains = useMemo(() => getAllTokensWithChains(), []);
   const filteredTokens = useMemo(() => {
@@ -170,9 +194,13 @@ export default function SwapModal({
   const fromTokens = getTokensForChain(fromChainId);
   const toTokens = getTokensForChain(toChainId);
   const fromToken =
-    fromTokens.find((t) => t.address === fromTokenAddress) ?? fromTokens[0]!;
+    fromTokens.find(
+      (t) => t.address.toLowerCase() === fromTokenAddress.toLowerCase(),
+    ) ?? fromTokens[0]!;
   const toToken =
-    toTokens.find((t) => t.address === toTokenAddress) ?? toTokens[0]!;
+    toTokens.find(
+      (t) => t.address.toLowerCase() === toTokenAddress.toLowerCase(),
+    ) ?? toTokens[0]!;
 
   const hasCalledOnOpenedRef = useRef(false);
   const fallbackBalanceRef = useRef(availableBalanceEth);
@@ -180,7 +208,7 @@ export default function SwapModal({
   fallbackBalanceRef.current = availableBalanceEth;
   getBalanceForChainRef.current = getBalanceForChain;
 
-  // Call onOpened only once when modal opens
+  // Call onOpened only once when modal opens; load recent ENS names
   useEffect(() => {
     if (isOpen && !hasCalledOnOpenedRef.current) {
       hasCalledOnOpenedRef.current = true;
@@ -188,8 +216,14 @@ export default function SwapModal({
     }
     if (!isOpen) {
       hasCalledOnOpenedRef.current = false;
+      setEnsDropdownOpen(false);
     }
   }, [isOpen, onOpened]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    getRecentEnsNames().then(setRecentEnsNames);
+  }, [isOpen]);
 
   // Fetch balance only when modal opens or user changes from chain. Do not depend on callback or prop balance so parent updates can't retrigger.
   useEffect(() => {
@@ -321,6 +355,9 @@ export default function SwapModal({
       setShowSlippage(false);
       setTokenSelectorMode(null);
       setDisplayBalance(null);
+      setEnsPreferencesError(null);
+      setEnsPreferencesLoaded(null);
+      setEnsDropdownOpen(false);
       setFromTokenAddress(NATIVE_ADDRESS);
       setToTokenAddress(
         fromChainId === 42161 || fromChainId === 43114
@@ -328,6 +365,77 @@ export default function SwapModal({
           : "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
       );
       onClose();
+    }
+  };
+
+  const handleLoadEnsPreferences = async () => {
+    const name = ensPreferencesName.trim();
+    if (!name) {
+      setEnsPreferencesError("Enter an ENS name");
+      return;
+    }
+    setEnsPreferencesLoading(true);
+    setEnsPreferencesError(null);
+    setEnsPreferencesLoaded(null);
+    try {
+      const prefs = await getVeilPreferences(name);
+      const validChainIds: LifiChainId[] = [1, 43114, 42161];
+      const effectiveFromChainId = (
+        prefs.defaultFromChainId != null &&
+        validChainIds.includes(prefs.defaultFromChainId as LifiChainId)
+          ? prefs.defaultFromChainId
+          : fromChainId
+      ) as LifiChainId;
+      const effectiveToChainId = (
+        prefs.defaultToChainId != null &&
+        validChainIds.includes(prefs.defaultToChainId as LifiChainId)
+          ? prefs.defaultToChainId
+          : toChainId
+      ) as LifiChainId;
+
+      const fromTokensList = getTokensForChain(effectiveFromChainId);
+      const toTokensList = getTokensForChain(effectiveToChainId);
+      const fromMatch = prefs.defaultFromToken
+        ? fromTokensList.find(
+            (x) =>
+              x.symbol.toUpperCase() === prefs.defaultFromToken!.toUpperCase(),
+          )
+        : null;
+      const toMatch = prefs.defaultToToken
+        ? toTokensList.find(
+            (x) =>
+              x.symbol.toUpperCase() === prefs.defaultToToken!.toUpperCase(),
+          )
+        : null;
+      const closestSlippage =
+        prefs.slippage !== undefined
+          ? [0.005, 0.01, 0.03].reduce((a, b) =>
+              Math.abs(a - prefs.slippage!) < Math.abs(b - prefs.slippage!)
+                ? a
+                : b,
+            )
+          : null;
+
+      startTransition(() => {
+        if (closestSlippage != null) setSlippage(closestSlippage);
+        if (effectiveFromChainId !== fromChainId)
+          setFromChainId(effectiveFromChainId);
+        if (effectiveToChainId !== toChainId) setToChainId(effectiveToChainId);
+        if (fromMatch) setFromTokenAddress(fromMatch.address);
+        if (toMatch) setToTokenAddress(toMatch.address);
+        setEnsPreferencesLoaded(name);
+      });
+      await addRecentEnsName(name);
+      setRecentEnsNames((prev) =>
+        [
+          name,
+          ...prev.filter((x) => x.toLowerCase() !== name.toLowerCase()),
+        ].slice(0, 10),
+      );
+    } catch (e) {
+      setEnsPreferencesError(getErrorMessage(e, "loading ENS preferences"));
+    } finally {
+      setEnsPreferencesLoading(false);
     }
   };
 
@@ -373,7 +481,11 @@ export default function SwapModal({
       : true;
   const hasQuoteOrRoute = quote || route;
   const canConfirm =
-    hasQuoteOrRoute && amountNum > 0 && hasEnoughBalance && !quoteLoading && !executing;
+    hasQuoteOrRoute &&
+    amountNum > 0 &&
+    hasEnoughBalance &&
+    !quoteLoading &&
+    !executing;
 
   return (
     <AnimatePresence>
@@ -386,7 +498,7 @@ export default function SwapModal({
             onClick={handleClose}
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
           />
-              <motion.div
+          <motion.div
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
@@ -460,6 +572,109 @@ export default function SwapModal({
                 </div>
               )}
 
+              {/* Load preferences from ENS */}
+              <div className="mb-3 p-2.5 rounded-lg bg-white/[0.06] border border-white/10">
+                <p className="text-[11px] font-medium text-gray-400 mb-2">
+                  Load swap preferences from ENS
+                </p>
+                <div className="flex gap-2 items-stretch">
+                  {/* Dropdown: recent ENS names */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setEnsDropdownOpen((o) => !o)}
+                      className="h-full min-w-[2.5rem] px-2.5 py-2 rounded-lg bg-white/5 border border-white/10 text-gray-400 hover:bg-white/10 hover:text-white flex items-center justify-center gap-0.5"
+                      title="Recent ENS names"
+                    >
+                      <ChevronDown
+                        className={`w-4 h-4 transition-transform ${ensDropdownOpen ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                    <AnimatePresence>
+                      {ensDropdownOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-[60]"
+                            aria-hidden
+                            onClick={() => setEnsDropdownOpen(false)}
+                          />
+                          <motion.div
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -4 }}
+                            transition={{ duration: 0.15 }}
+                            className="absolute left-0 top-full mt-1 min-w-[180px] max-h-48 overflow-y-auto rounded-lg bg-gray-800 border border-white/10 shadow-xl z-[70] py-1"
+                          >
+                            {recentEnsNames.length === 0 ? (
+                              <p className="px-3 py-2 text-[11px] text-gray-500">
+                                No recent names
+                              </p>
+                            ) : (
+                              recentEnsNames.map((ensName) => {
+                                const preset =
+                                  PRESET_ENS_CONFIGS[ensName.toLowerCase()];
+                                return (
+                                  <button
+                                    key={ensName}
+                                    type="button"
+                                    onClick={() => {
+                                      setEnsPreferencesName(ensName);
+                                      setEnsPreferencesError(null);
+                                      setEnsDropdownOpen(false);
+                                    }}
+                                    className="w-full text-left px-3 py-2 text-xs text-white hover:bg-white/10"
+                                  >
+                                    <span className="block font-medium">
+                                      {ensName}
+                                    </span>
+                                    {preset && (
+                                      <span className="block text-[10px] text-gray-500 mt-0.5">
+                                        {formatPresetDescription(preset)}
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  <input
+                    type="text"
+                    value={ensPreferencesName}
+                    onChange={(e) => {
+                      setEnsPreferencesName(e.target.value);
+                      setEnsPreferencesError(null);
+                    }}
+                    placeholder="Enter ENS name (e.g. name.eth)"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/40 focus:border-emerald-500/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleLoadEnsPreferences}
+                    disabled={ensPreferencesLoading}
+                    className="shrink-0 px-3 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-xs font-medium hover:bg-emerald-500/30 disabled:opacity-50 flex items-center gap-1"
+                  >
+                    {ensPreferencesLoading ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : null}
+                    Load
+                  </button>
+                </div>
+                {ensPreferencesLoaded && (
+                  <p className="mt-1.5 text-[11px] text-green-400/90">
+                    Loaded preferences from {ensPreferencesLoaded}
+                  </p>
+                )}
+                {ensPreferencesError && (
+                  <p className="mt-1.5 text-[11px] text-red-400">
+                    {ensPreferencesError}
+                  </p>
+                )}
+              </div>
+
               {/* From */}
               <div className="mb-1 p-2 rounded-lg bg-white/[0.06] border border-white/10">
                 <p className="text-[11px] font-medium text-gray-500 mb-1">
@@ -488,8 +703,8 @@ export default function SwapModal({
                     <div
                       className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold overflow-hidden shrink-0 ${
                         !getTokenIconUrl(fromToken.symbol)
-                          ? CHAIN_COLORS[fromChainId] ??
-                            "bg-white/10 text-gray-300 border border-white/10"
+                          ? (CHAIN_COLORS[fromChainId] ??
+                            "bg-white/10 text-gray-300 border border-white/10")
                           : ""
                       }`}
                     >
@@ -539,16 +754,11 @@ export default function SwapModal({
 
               {/* To */}
               <div className="mb-3 p-2 rounded-lg bg-white/[0.04] border border-white/10">
-                <p className="text-[11px] font-medium text-gray-500 mb-1">
-                  To
-                </p>
+                <p className="text-[11px] font-medium text-gray-500 mb-1">To</p>
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex-1 min-w-0 text-lg font-semibold text-white tabular-nums">
                     {route
-                      ? formatTokenAmount(
-                          route.toAmount,
-                          toToken.decimals,
-                        )
+                      ? formatTokenAmount(route.toAmount, toToken.decimals)
                       : quote
                         ? formatTokenAmount(
                             quote.estimate.toAmount,
@@ -568,8 +778,8 @@ export default function SwapModal({
                     <div
                       className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold overflow-hidden shrink-0 ${
                         !getTokenIconUrl(toToken.symbol)
-                          ? CHAIN_COLORS[toChainId] ??
-                            "bg-white/10 text-gray-300 border border-white/10"
+                          ? (CHAIN_COLORS[toChainId] ??
+                            "bg-white/10 text-gray-300 border border-white/10")
                           : ""
                       }`}
                     >
@@ -735,8 +945,8 @@ export default function SwapModal({
                                   <div
                                     className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 overflow-hidden ${
                                       !tokenIconUrl
-                                        ? CHAIN_COLORS[t.chainId] ??
-                                          "bg-white/10 text-gray-300 border border-white/10"
+                                        ? (CHAIN_COLORS[t.chainId] ??
+                                          "bg-white/10 text-gray-300 border border-white/10")
                                         : ""
                                     }`}
                                   >
@@ -798,25 +1008,25 @@ export default function SwapModal({
                 (quote &&
                   quote.estimate.gasCosts &&
                   quote.estimate.gasCosts.length > 0)) && (
-                  <div className="mb-2 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 text-[11px] text-gray-500">
-                    Est. gas:{" "}
-                    {route
-                      ? route.steps
-                          .flatMap((s) => s.estimate.gasCosts ?? [])
-                          .slice(0, 3)
-                          .map(
-                            (g) =>
-                              `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
-                          )
-                          .join(", ")
-                      : quote!.estimate.gasCosts!
-                          .map(
-                            (g) =>
-                              `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
-                          )
-                          .join(", ")}
-                  </div>
-                )}
+                <div className="mb-2 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 text-[11px] text-gray-500">
+                  Est. gas:{" "}
+                  {route
+                    ? route.steps
+                        .flatMap((s) => s.estimate.gasCosts ?? [])
+                        .slice(0, 3)
+                        .map(
+                          (g) =>
+                            `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
+                        )
+                        .join(", ")
+                    : quote!.estimate
+                        .gasCosts!.map(
+                          (g) =>
+                            `${(Number(g.amount) / 10 ** (g.token?.decimals ?? 18)).toFixed(3)} ${g.token?.symbol ?? "ETH"}`,
+                        )
+                        .join(", ")}
+                </div>
+              )}
 
               <div className="flex flex-col gap-2 pt-0.5">
                 <button
@@ -846,11 +1056,14 @@ export default function SwapModal({
                     </>
                   )}
                 </button>
-                {!canConfirm && amountNum > 0 && hasQuoteOrRoute && !hasEnoughBalance && (
-                  <p className="text-[11px] text-amber-400/90 text-center -mt-1">
-                    Insufficient balance
-                  </p>
-                )}
+                {!canConfirm &&
+                  amountNum > 0 &&
+                  hasQuoteOrRoute &&
+                  !hasEnoughBalance && (
+                    <p className="text-[11px] text-amber-400/90 text-center -mt-1">
+                      Insufficient balance
+                    </p>
+                  )}
                 <button
                   type="button"
                   onClick={handleClose}

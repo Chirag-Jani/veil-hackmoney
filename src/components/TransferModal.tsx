@@ -1,8 +1,9 @@
 import { PublicKey } from "@solana/web3.js";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, Loader2, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NetworkType } from "../types";
+import { looksLikeEnsName, resolveName } from "../utils/ens";
 import { getErrorMessage } from "../utils/errorHandler";
 import { formatAddress } from "../utils/storage";
 
@@ -29,20 +30,54 @@ const TransferModal = ({
 }: TransferModalProps) => {
   const [amount, setAmount] = useState<string>("");
   const [recipient, setRecipient] = useState<string>("");
+  const [resolvedEnsAddress, setResolvedEnsAddress] = useState<string | null>(
+    null,
+  );
+  const [resolvingEns, setResolvingEns] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const resolveEnsRecipient = async () => {
+    if (!isEvm || !recipient.trim() || !looksLikeEnsName(recipient)) return;
+    setResolvingEns(true);
+    setError(null);
+    try {
+      const addr = await resolveName(recipient.trim());
+      setResolvedEnsAddress(addr);
+      if (!addr) setError("ENS name could not be resolved");
+    } catch {
+      setResolvedEnsAddress(null);
+      setError("Failed to resolve ENS name");
+    } finally {
+      setResolvingEns(false);
+    }
+  };
+
   const isEvm =
     network === "ethereum" || network === "avalanche" || network === "arbitrum";
-  const symbol =
-    network === "avalanche" ? "AVAX" : isEvm ? "ETH" : "SOL";
+  const symbol = network === "avalanche" ? "AVAX" : isEvm ? "ETH" : "SOL";
   const feeEstimate = isEvm ? 0.001 : 0.000005;
   const minAmount = isEvm ? 0.0001 : 0.000001;
+
+  // Auto-resolve ENS when user types a name (debounced) so we show "Resolving ENS…" instead of "Resolve ENS to continue"
+  const resolveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!isEvm || !recipient.trim() || !looksLikeEnsName(recipient)) return;
+    if (resolveTimeoutRef.current) clearTimeout(resolveTimeoutRef.current);
+    resolveTimeoutRef.current = setTimeout(() => {
+      resolveTimeoutRef.current = null;
+      resolveEnsRecipient();
+    }, 400);
+    return () => {
+      if (resolveTimeoutRef.current) clearTimeout(resolveTimeoutRef.current);
+    };
+  }, [recipient, isEvm]);
 
   const handleClose = () => {
     if (!isTransferring) {
       setAmount("");
       setRecipient("");
+      setResolvedEnsAddress(null);
       setError(null);
       onClose();
     }
@@ -77,9 +112,20 @@ const TransferModal = ({
       return;
     }
 
+    let finalRecipient: string;
     if (isEvm) {
-      if (!isValidEthAddress(recipient)) {
-        setError("Invalid Ethereum address (0x + 40 hex characters)");
+      if (isValidEthAddress(recipient)) {
+        finalRecipient = recipient.trim();
+      } else if (looksLikeEnsName(recipient)) {
+        const resolved = await resolveName(recipient.trim());
+        if (!resolved) {
+          setError("ENS name could not be resolved");
+          return;
+        }
+        finalRecipient = resolved;
+        setResolvedEnsAddress(resolved);
+      } else {
+        setError("Invalid Ethereum address or ENS name (e.g. vitalik.eth)");
         return;
       }
     } else {
@@ -89,13 +135,14 @@ const TransferModal = ({
         setError("Invalid Solana address");
         return;
       }
+      finalRecipient = recipient.trim();
     }
 
     setIsTransferring(true);
     setError(null);
 
     try {
-      await onTransfer(transferAmount, recipient.trim());
+      await onTransfer(transferAmount, finalRecipient);
       setTimeout(() => {
         setAmount("");
         setRecipient("");
@@ -110,14 +157,17 @@ const TransferModal = ({
   };
 
   const transferAmount = parseFloat(amount) || 0;
+  const isEnsRecipient = isEvm && looksLikeEnsName(recipient);
+  const ensReady = isEnsRecipient && resolvedEnsAddress && !resolvingEns;
   const recipientValid = isEvm
-    ? isValidEthAddress(recipient)
+    ? isValidEthAddress(recipient) || ensReady
     : recipient.length >= 32;
   const isValid =
     transferAmount > 0 &&
     transferAmount <= availableBalance &&
     transferAmount >= minAmount &&
-    recipientValid;
+    recipientValid &&
+    !resolvingEns;
 
   return (
     <AnimatePresence>
@@ -215,21 +265,49 @@ const TransferModal = ({
               {/* Recipient Input */}
               <div className="mb-4">
                 <label className="block text-xs font-medium text-gray-400 mb-2">
-                  Recipient Address
+                  Recipient {isEvm ? "address or ENS name" : "Address"}
                 </label>
-                <input
-                  type="text"
-                  value={recipient}
-                  onChange={(e) => {
-                    setRecipient(e.target.value);
-                    setError(null);
-                  }}
-                  placeholder={isEvm ? "0x..." : "Enter Solana address"}
-                  disabled={isTransferring}
-                  className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-gray-600 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/50 disabled:opacity-50 disabled:cursor-not-allowed font-mono text-sm"
-                />
+                <div
+                  className={`relative rounded-xl border transition-colors ${
+                    resolvingEns
+                      ? "border-amber-500/40 bg-amber-500/5"
+                      : "border-white/10 bg-white/5"
+                  }`}
+                >
+                  <input
+                    type="text"
+                    value={recipient}
+                    onBlur={resolveEnsRecipient}
+                    onChange={(e) => {
+                      setRecipient(e.target.value);
+                      setResolvedEnsAddress(null);
+                      setError(null);
+                    }}
+                    placeholder={
+                      isEvm ? "0x... or name.eth" : "Enter Solana address"
+                    }
+                    disabled={isTransferring || resolvingEns}
+                    className="w-full px-4 py-3 pr-10 bg-transparent text-white placeholder-gray-600 focus:outline-none focus:ring-0 disabled:opacity-70 disabled:cursor-wait font-mono text-sm rounded-xl"
+                  />
+                  {resolvingEns && isEvm && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <Loader2 className="w-5 h-5 text-amber-400 animate-spin" />
+                    </div>
+                  )}
+                </div>
+                {resolvingEns && isEvm && (
+                  <p className="mt-1.5 text-xs text-amber-400/90 flex items-center gap-1.5">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    Resolving ENS name…
+                  </p>
+                )}
+                {resolvedEnsAddress && isEvm && !resolvingEns && (
+                  <p className="mt-1.5 text-xs text-green-400/90">
+                    Resolves to {formatAddress(resolvedEnsAddress)}
+                  </p>
+                )}
                 {error && (
-                  <div className="mt-2 p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                  <div className="mt-1.5">
                     <p className="text-xs text-red-400 font-medium">{error}</p>
                   </div>
                 )}
@@ -250,6 +328,11 @@ const TransferModal = ({
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span>Transferring...</span>
+                    </>
+                  ) : isEnsRecipient && !resolvedEnsAddress && !error ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Resolving ENS…</span>
                     </>
                   ) : (
                     <>
