@@ -1,24 +1,30 @@
 /**
  * Transaction History Management
- * 
- * Tracks all transactions: deposits, withdrawals, transfers, and incoming SOL
+ *
+ * Tracks all transactions: deposits, withdrawals, transfers (Solana + EVM), swap, and incoming SOL
  */
 
-export type TransactionType = 'deposit' | 'withdraw' | 'deposit_and_withdraw' | 'transfer' | 'incoming';
+import type { NetworkType } from "../types";
+
+export type TransactionType = 'deposit' | 'withdraw' | 'deposit_and_withdraw' | 'transfer' | 'incoming' | 'swap';
 
 export interface Transaction {
   id: string; // Unique transaction ID
   type: TransactionType;
   timestamp: number; // Unix timestamp in milliseconds
-  amount: number; // Amount in SOL
+  amount: number; // Amount in token units (SOL, ETH, AVAX, etc.)
   fromAddress?: string; // Source address (for transfers/withdrawals)
   toAddress?: string; // Destination address (for transfers/deposits)
   walletIndex?: number; // Associated burner wallet index
-  signature?: string; // Transaction signature (if available)
+  signature?: string; // Transaction signature (tx hash if available)
   status: 'pending' | 'confirmed' | 'failed';
   error?: string; // Error message if failed
   privateBalanceBefore?: number; // Private balance before transaction (for deposits/withdrawals)
   privateBalanceAfter?: number; // Private balance after transaction
+  /** Chain for this tx (Solana or EVM). Used for explorer link and label. */
+  network?: NetworkType;
+  /** Token symbol for amount display (e.g. SOL, ETH, AVAX, USDC). */
+  symbol?: string;
 }
 
 /**

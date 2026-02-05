@@ -78,11 +78,16 @@ const STORAGE_KEYS = {
   IMPORT_TYPE: "veil:import_type",
 } as const;
 
+const EVM_NETWORKS: NetworkType[] = ["ethereum", "avalanche", "arbitrum"];
+function evmCanonical(network: NetworkType): NetworkType {
+  return EVM_NETWORKS.includes(network) ? "ethereum" : network;
+}
+
 function burnerIndexKey(network: NetworkType): string {
-  return `${STORAGE_KEYS.BURNER_INDEX}:${network}`;
+  return `${STORAGE_KEYS.BURNER_INDEX}:${evmCanonical(network)}`;
 }
 function retiredBurnersKey(network: NetworkType): string {
-  return `${STORAGE_KEYS.RETIRED_BURNERS}:${network}`;
+  return `${STORAGE_KEYS.RETIRED_BURNERS}:${evmCanonical(network)}`;
 }
 
 /**
@@ -480,12 +485,12 @@ export async function hasWallet(): Promise<boolean> {
 }
 
 /**
- * Get the next burner wallet index for a network
+ * Get the next burner wallet index for a network. EVM chains share one index.
  */
 export async function getNextBurnerIndex(
   network: NetworkType
 ): Promise<number> {
-  const key = burnerIndexKey(network);
+  const key = burnerIndexKey(evmCanonical(network));
   const result = await chrome.storage.local.get(key);
   const currentIndex = result[key];
   if (typeof currentIndex === "number" && Number.isInteger(currentIndex)) {
@@ -500,14 +505,14 @@ export async function getNextBurnerIndex(
 }
 
 /**
- * Increment and save the burner wallet index for a network
+ * Increment and save the burner wallet index. EVM chains share one index.
  */
 export async function incrementBurnerIndex(
   network: NetworkType
 ): Promise<number> {
   const currentIndex = await getNextBurnerIndex(network);
   const nextIndex = currentIndex + 1;
-  await chrome.storage.local.set({ [burnerIndexKey(network)]: nextIndex });
+  await chrome.storage.local.set({ [burnerIndexKey(evmCanonical(network))]: nextIndex });
   return nextIndex;
 }
 
@@ -560,7 +565,7 @@ export function deriveEthereumWalletFromSeed(
 }
 
 /**
- * Generate a new burner wallet keypair for the given network
+ * Generate a new burner wallet keypair. EVM chains share the same wallet set (same index = same address on all EVM).
  */
 export async function generateBurnerKeypair(
   seed: Uint8Array,
@@ -569,14 +574,15 @@ export async function generateBurnerKeypair(
   | { keypair: Keypair; index: number }
   | { address: string; privateKey: string; index: number }
 > {
-  const retired = await getRetiredBurners(network);
-  let index = await getNextBurnerIndex(network);
+  const canonical = evmCanonical(network);
+  const retired = await getRetiredBurners(canonical);
+  let index = await getNextBurnerIndex(canonical);
 
   while (retired.includes(index)) {
-    index = await incrementBurnerIndex(network);
+    index = await incrementBurnerIndex(canonical);
   }
 
-  await incrementBurnerIndex(network);
+  await incrementBurnerIndex(canonical);
 
   if (network === "solana") {
     const keypair = deriveKeypairFromSeed(seed, index);

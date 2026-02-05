@@ -35,11 +35,18 @@ import WithdrawModal from "../components/WithdrawModal";
 import type { CheckBalancesResponse, NetworkType } from "../types";
 import { getErrorMessage, logError } from "../utils/errorHandler";
 import {
+  getArbitrumBalance,
   getArbitrumRPCManager,
+  getAvalancheBalance,
   getAvalancheRPCManager,
+  getErc20Balance,
+  getEthBalance,
   getEthRPCManager,
+  getRpcManagerForChainId,
+  weiToEth,
 } from "../utils/ethRpcManager";
-import { getRpcUrlForChain } from "../utils/lifi";
+import { getAlchemyPrice } from "../utils/alchemyPrices";
+import { getRpcUrlForChain, LIFI_TOKENS_BY_CHAIN } from "../utils/lifi";
 import type { LifiQuote } from "../utils/lifi";
 import {
   generateBurnerKeypair,
@@ -120,6 +127,9 @@ const Home = () => {
     useState<PendingConnectionRequest | null>(null);
   const [pendingSignRequest, setPendingSignRequest] =
     useState<PendingSignRequest | null>(null);
+  const [evmTokenBalances, setEvmTokenBalances] = useState<
+    { symbol: string; balance: number; decimals: number; name: string }[]
+  >([]);
   const [connectedSites, setConnectedSites] = useState<ConnectedSite[]>([]);
   const [activeNetwork, setActiveNetworkState] =
     useState<NetworkType>("ethereum");
@@ -130,7 +140,26 @@ const Home = () => {
     async (network?: NetworkType) => {
       const net = network ?? activeNetwork;
       try {
-        const wallets = await getAllBurnerWallets(net);
+        let wallets = await getAllBurnerWallets(net);
+        if (
+          (net === "avalanche" || net === "arbitrum") &&
+          wallets.length > 0
+        ) {
+          const chainBalance = async (addr: string): Promise<number> => {
+            if (net === "avalanche") {
+              const wei = await getAvalancheBalance(addr);
+              return weiToEth(wei);
+            }
+            const wei = await getArbitrumBalance(addr);
+            return weiToEth(wei);
+          };
+          wallets = await Promise.all(
+            wallets.map(async (w) => ({
+              ...w,
+              balance: await chainBalance(w.fullAddress),
+            }))
+          );
+        }
         setBurnerWallets(wallets);
         if (wallets.length > 0) {
           const active = wallets.find((w) => w.isActive) || wallets[0];
@@ -502,20 +531,11 @@ const Home = () => {
     }
   }, [showSitesList, loadConnectedSites]);
 
-  // Fetch SOL price from CoinGecko
+  // Fetch SOL price from Alchemy (tries each API key until one succeeds)
   useEffect(() => {
     const fetchSolPrice = async () => {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.solana?.usd) setSolPrice(data.solana.usd);
-        }
-      } catch (e) {
-        console.error("[Veil] Error fetching SOL price:", e);
-      }
+      const price = await getAlchemyPrice("SOL");
+      if (price != null) setSolPrice(price);
     };
     fetchSolPrice();
     const interval = setInterval(fetchSolPrice, 5 * 60 * 1000);
@@ -526,17 +546,8 @@ const Home = () => {
   useEffect(() => {
     if (activeNetwork !== "ethereum" && activeNetwork !== "arbitrum") return;
     const fetchEthPrice = async () => {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.ethereum?.usd) setEthPrice(data.ethereum.usd);
-        }
-      } catch (e) {
-        console.error("[Veil] Error fetching ETH price:", e);
-      }
+      const price = await getAlchemyPrice("ETH");
+      if (price != null) setEthPrice(price);
     };
     fetchEthPrice();
     const interval = setInterval(fetchEthPrice, 5 * 60 * 1000);
@@ -547,17 +558,8 @@ const Home = () => {
   useEffect(() => {
     if (activeNetwork !== "avalanche") return;
     const fetchAvaxPrice = async () => {
-      try {
-        const res = await fetch(
-          "https://api.coingecko.com/api/v3/simple/price?ids=avalanche-2&vs_currencies=usd"
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data["avalanche-2"]?.usd) setAvaxPrice(data["avalanche-2"].usd);
-        }
-      } catch (e) {
-        console.error("[Veil] Error fetching AVAX price:", e);
-      }
+      const price = await getAlchemyPrice("AVAX");
+      if (price != null) setAvaxPrice(price);
     };
     fetchAvaxPrice();
     const interval = setInterval(fetchAvaxPrice, 5 * 60 * 1000);
@@ -764,6 +766,71 @@ const Home = () => {
       };
     }
   }, [isLocked, activeWalletIndex]);
+
+  // Fetch USDC and other supported token balances for EVM chains
+  useEffect(() => {
+    const net = activeNetwork;
+    if (
+      (net !== "ethereum" && net !== "avalanche" && net !== "arbitrum") ||
+      !activeWallet?.fullAddress
+    ) {
+      setEvmTokenBalances([]);
+      return;
+    }
+    const chainId = net === "arbitrum" ? 42161 : net === "avalanche" ? 43114 : 1;
+    const tokens = LIFI_TOKENS_BY_CHAIN[chainId] ?? [];
+    const erc20Tokens = tokens.filter(
+      (t) => t.address !== "0x0000000000000000000000000000000000000000"
+    );
+    if (erc20Tokens.length === 0) {
+      setEvmTokenBalances([]);
+      return;
+    }
+    let cancelled = false;
+    const manager = getRpcManagerForChainId(chainId);
+    const RPC_TIMEOUT_MS = 20000; // 20s per token for slow Avalanche RPCs
+    const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<never>((_, rej) =>
+          setTimeout(() => rej(new Error("RPC timeout")), RPC_TIMEOUT_MS)
+        ),
+      ]);
+    const delay = (ms: number) =>
+      new Promise<void>((r) => setTimeout(r, ms));
+
+    (async () => {
+      const arr: {
+        symbol: string;
+        balance: number;
+        decimals: number;
+        name: string;
+      }[] = [];
+      for (let i = 0; i < erc20Tokens.length; i++) {
+        if (cancelled) return;
+        const t = erc20Tokens[i]!;
+        try {
+          const raw = await withTimeout(
+            getErc20Balance(manager, t.address, activeWallet!.fullAddress)
+          );
+          const balance = Number(raw) / 10 ** t.decimals;
+          arr.push({ symbol: t.symbol, balance, decimals: t.decimals, name: t.name });
+        } catch {
+          arr.push({
+            symbol: t.symbol,
+            balance: 0,
+            decimals: t.decimals,
+            name: t.name,
+          });
+        }
+        if (i < erc20Tokens.length - 1) await delay(400);
+      }
+      if (!cancelled) setEvmTokenBalances(arr);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNetwork, activeWallet?.fullAddress]);
 
   // Deposit handler using real Privacy Cash service
   const handleDeposit = async (amount: number): Promise<void> => {
@@ -1568,6 +1635,13 @@ const Home = () => {
       toAddress: recipient,
       walletIndex: activeWallet.index,
       status: "pending",
+      network: activeWallet.network,
+      symbol:
+        activeWallet.network === "avalanche"
+          ? "AVAX"
+          : activeWallet.network === "ethereum" || activeWallet.network === "arbitrum"
+            ? "ETH"
+            : "SOL",
     };
     await storeTransaction(transaction);
 
@@ -1875,42 +1949,68 @@ const Home = () => {
       const fromTokenAddress = quote.action.fromToken.address;
       const fromAmount = quote.action.fromAmount;
       const approvalAddress = quote.estimate.approvalAddress;
-
-      const sendTx = async (rpcUrl: string) => {
-        const provider = new JsonRpcProvider(rpcUrl, chainId);
-        const wallet = new Wallet(privateKey, provider);
-        if (
-          fromTokenAddress &&
-          fromTokenAddress !== NATIVE_TOKEN_ADDRESS &&
-          approvalAddress
-        ) {
-          const erc20 = new Contract(fromTokenAddress, ERC20_ABI, wallet);
-          const allowance = await erc20.allowance(
-            await wallet.getAddress(),
-            approvalAddress
-          );
-          if (BigInt(allowance.toString()) < BigInt(fromAmount)) {
-            const approveTx = await erc20.approve(approvalAddress, fromAmount);
-            await approveTx.wait();
-          }
-        }
-        return wallet.sendTransaction(quote.transactionRequest);
+      const networkForTx: NetworkType =
+        chainId === 43114 ? "avalanche" : chainId === 42161 ? "arbitrum" : "ethereum";
+      const swapTxId = generateTransactionId();
+      const swapTransaction: TransactionRecord = {
+        id: swapTxId,
+        type: "swap",
+        timestamp: Date.now(),
+        amount:
+          Number(fromAmount) / 10 ** (quote.action.fromToken?.decimals ?? 18),
+        fromAddress: activeWallet.fullAddress,
+        walletIndex: activeWallet.index,
+        status: "pending",
+        network: networkForTx,
+        symbol: quote.action.fromToken?.symbol ?? "ETH",
       };
+      await storeTransaction(swapTransaction);
 
-      let tx;
-      if (chainId === 1) {
-        tx = await getEthRPCManager().executeWithRetry(sendTx);
-      } else if (chainId === 42161) {
-        tx = await getArbitrumRPCManager().executeWithRetry(sendTx);
-      } else if (chainId === 43114) {
-        tx = await getAvalancheRPCManager().executeWithRetry(sendTx);
-      } else {
-        const rpcUrl = getRpcUrlForChain(chainId);
-        tx = await sendTx(rpcUrl);
+      try {
+        const sendTx = async (rpcUrl: string) => {
+          const provider = new JsonRpcProvider(rpcUrl, chainId);
+          const wallet = new Wallet(privateKey, provider);
+          if (
+            fromTokenAddress &&
+            fromTokenAddress !== NATIVE_TOKEN_ADDRESS &&
+            approvalAddress
+          ) {
+            const erc20 = new Contract(fromTokenAddress, ERC20_ABI, wallet);
+            const allowance = await erc20.allowance(
+              await wallet.getAddress(),
+              approvalAddress
+            );
+            if (BigInt(allowance.toString()) < BigInt(fromAmount)) {
+              const approveTx = await erc20.approve(approvalAddress, fromAmount);
+              await approveTx.wait();
+            }
+          }
+          return wallet.sendTransaction(quote.transactionRequest);
+        };
+
+        let tx;
+        if (chainId === 1) {
+          tx = await getEthRPCManager().executeWithRetry(sendTx);
+        } else if (chainId === 42161) {
+          tx = await getArbitrumRPCManager().executeWithRetry(sendTx);
+        } else if (chainId === 43114) {
+          tx = await getAvalancheRPCManager().executeWithRetry(sendTx);
+        } else {
+          const rpcUrl = getRpcUrlForChain(chainId);
+          tx = await sendTx(rpcUrl);
+        }
+        await tx.wait();
+        swapTransaction.status = "confirmed";
+        swapTransaction.signature = tx.hash;
+        await storeTransaction(swapTransaction);
+        await loadWallets(activeNetwork);
+        return tx.hash;
+      } catch (err) {
+        swapTransaction.status = "failed";
+        swapTransaction.error = getErrorMessage(err, "executing swap");
+        await storeTransaction(swapTransaction);
+        throw err;
       }
-      await tx.wait();
-      await loadWallets(activeNetwork);
-      return tx.hash;
     },
     [
       activeWallet,
@@ -1919,6 +2019,43 @@ const Home = () => {
       loadWallets,
     ]
   );
+
+  const getBalanceForChain = useCallback(
+    async (chainId: number): Promise<number> => {
+      if (!activeWallet?.fullAddress) return 0;
+      const addr = activeWallet.fullAddress;
+      if (chainId === 1) {
+        const wei = await getEthBalance(addr);
+        return weiToEth(wei);
+      }
+      if (chainId === 43114) {
+        const wei = await getAvalancheBalance(addr);
+        return weiToEth(wei);
+      }
+      if (chainId === 42161) {
+        const wei = await getArbitrumBalance(addr);
+        return weiToEth(wei);
+      }
+      return 0;
+    },
+    [activeWallet?.fullAddress]
+  );
+
+  const refetchBalancesForSwap = useCallback(async () => {
+    try {
+      await sendMessage<CheckBalancesResponse>({ type: "checkBalances" });
+      const updatedWallets = await getAllBurnerWallets();
+      setBurnerWallets(updatedWallets);
+      if (activeWallet) {
+        const updated = updatedWallets.find(
+          (w) => w.index === activeWallet.index
+        );
+        if (updated) setActiveWallet(updated);
+      }
+    } catch (e) {
+      console.error("[Veil] Error refetching balances for swap:", e);
+    }
+  }, [activeWallet]);
 
   // Show loading state during initial check
   if (isLoading) {
@@ -2258,6 +2395,49 @@ const Home = () => {
               </div>
             </div>
           </motion.div>
+
+          {/* EVM token balances (USDC, USDT, etc.) */}
+          {(activeNetwork === "ethereum" ||
+            activeNetwork === "avalanche" ||
+            activeNetwork === "arbitrum") &&
+            evmTokenBalances.map((t) => (
+              <motion.div
+                key={t.symbol}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm">
+                        {t.symbol.slice(0, 2)}
+                      </span>
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-white">
+                          {t.name}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {t.balance.toFixed(t.decimals === 6 ? 2 : 6)} {t.symbol}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold text-white">
+                      $
+                      {(t.symbol === "USDC" || t.symbol === "USDT"
+                        ? t.balance
+                        : 0
+                      ).toFixed(2)}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">-</p>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
 
           {/* Private Balance Card - Solana only, when Privacy Cash mode is enabled */}
           {activeNetwork === "solana" && privacyCashMode && (
@@ -2699,6 +2879,8 @@ const Home = () => {
           onExecute={handleSwapExecute}
           fromAddress={activeWallet.fullAddress}
           availableBalanceEth={activeWallet.balance}
+          getBalanceForChain={getBalanceForChain}
+          onOpened={refetchBalancesForSwap}
           evmNetwork={
             activeNetwork === "arbitrum"
               ? "arbitrum"

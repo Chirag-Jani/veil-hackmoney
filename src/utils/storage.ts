@@ -66,17 +66,28 @@ export function getAddressFromKeypair(keypair: Keypair): string {
   return keypair.publicKey.toBase58();
 }
 
+/** EVM chains share one wallet set; canonical storage is under "ethereum". */
+const EVM_NETWORKS: NetworkType[] = ["ethereum", "avalanche", "arbitrum"];
+function isEvm(network: NetworkType): boolean {
+  return EVM_NETWORKS.includes(network);
+}
+function evmCanonicalNetwork(network: NetworkType): NetworkType {
+  return isEvm(network) ? "ethereum" : network;
+}
+
 /** Storage key prefix for burners: veil:burner:{network}:{index} or legacy veil:burner:{index} */
 function burnerKey(network: NetworkType, index: number): string {
   return `veil:burner:${network}:${index}`;
 }
 
 /**
- * Store burner wallet data
+ * Store burner wallet data. EVM wallets (ethereum/avalanche/arbitrum) are stored under ethereum key.
  */
 export async function storeBurnerWallet(wallet: BurnerWallet): Promise<void> {
-  const key = burnerKey(wallet.network, wallet.index);
-  await chrome.storage.local.set({ [key]: wallet });
+  const storageNetwork = evmCanonicalNetwork(wallet.network);
+  const key = burnerKey(storageNetwork, wallet.index);
+  const toStore = { ...wallet, network: storageNetwork };
+  await chrome.storage.local.set({ [key]: toStore });
 }
 
 /**
@@ -104,18 +115,29 @@ export async function getAllBurnerWallets(
     const wallet = value as BurnerWallet;
     if (wallet.archived) continue;
 
-    // New format: veil:burner:solana:0, veil:burner:ethereum:0, veil:burner:arbitrum:0
     const newMatch = key.match(
       /^veil:burner:(solana|ethereum|avalanche|arbitrum):(\d+)$/
     );
     if (newMatch) {
-      const walletNetwork = newMatch[1] as NetworkType;
-      if (network !== undefined && walletNetwork !== network) continue;
-      wallets.push({ ...wallet, network: walletNetwork });
+      const storedNetwork = newMatch[1] as NetworkType;
+      const canonical = evmCanonicalNetwork(storedNetwork);
+      if (canonical === "ethereum" && storedNetwork !== "ethereum") continue;
+      if (network !== undefined) {
+        if (canonical === "solana") {
+          if (network !== "solana") continue;
+          wallets.push({ ...wallet, network: "solana" });
+        } else {
+          if (!isEvm(network)) continue;
+          wallets.push({ ...wallet, network });
+        }
+      } else {
+        if (canonical === "ethereum")
+          wallets.push({ ...wallet, network: "ethereum" });
+        else wallets.push({ ...wallet, network: storedNetwork });
+      }
       continue;
     }
 
-    // Legacy format: veil:burner:0 (Solana only)
     const legacyMatch = key.match(/^veil:burner:(\d+)$/);
     if (legacyMatch) {
       if (network !== undefined && network !== "solana") continue;
@@ -162,7 +184,7 @@ export async function getActiveBurnerWallet(
 }
 
 /**
- * Get all archived burner wallets. If network provided, only that network.
+ * Get all archived burner wallets. EVM chains share ethereum keys.
  */
 export async function getArchivedBurnerWallets(
   network?: NetworkType
@@ -177,31 +199,40 @@ export async function getArchivedBurnerWallets(
     const newFormat = key.match(
       /^veil:burner:(solana|ethereum|avalanche|arbitrum):(\d+)$/
     );
-    const net: NetworkType = newFormat
-      ? (newFormat[1] as NetworkType)
-      : "solana";
-    if (network !== undefined && net !== network) continue;
-    wallets.push({ ...wallet, network: net } as BurnerWallet);
+    const storedNet = newFormat ? (newFormat[1] as NetworkType) : "solana";
+    const canonical = evmCanonicalNetwork(storedNet);
+    if (network !== undefined) {
+      if (canonical === "solana" && network !== "solana") continue;
+      if (canonical === "ethereum" && !isEvm(network)) continue;
+    }
+    const displayNet =
+      network !== undefined && isEvm(network)
+        ? network
+        : canonical === "ethereum"
+          ? "ethereum"
+          : storedNet;
+    wallets.push({ ...wallet, network: displayNet } as BurnerWallet);
   }
 
   return wallets.sort((a, b) => b.id - a.id);
 }
 
 /**
- * Archive a burner wallet (requires network for key)
+ * Archive a burner wallet. EVM chains use ethereum key.
  */
 export async function archiveBurnerWallet(
   walletIndex: number,
   network: NetworkType
 ): Promise<void> {
-  const key = burnerKey(network, walletIndex);
+  const storageNetwork = evmCanonicalNetwork(network);
+  const key = burnerKey(storageNetwork, walletIndex);
   const result = await chrome.storage.local.get(key);
   if (result[key]) {
     const wallet = result[key] as BurnerWallet;
     wallet.archived = true;
     wallet.isActive = false;
     await chrome.storage.local.set({ [key]: wallet });
-    await retireBurner(walletIndex, network);
+    await retireBurner(walletIndex, storageNetwork);
   }
   const legacyKey = `veil:burner:${walletIndex}`;
   const legacy = await chrome.storage.local.get(legacyKey);
@@ -215,13 +246,14 @@ export async function archiveBurnerWallet(
 }
 
 /**
- * Unarchive a burner wallet
+ * Unarchive a burner wallet. EVM chains use ethereum key.
  */
 export async function unarchiveBurnerWallet(
   walletIndex: number,
   network: NetworkType
 ): Promise<void> {
-  const key = burnerKey(network, walletIndex);
+  const storageNetwork = evmCanonicalNetwork(network);
+  const key = burnerKey(storageNetwork, walletIndex);
   const result = await chrome.storage.local.get(key);
   if (result[key]) {
     const wallet = result[key] as BurnerWallet;
@@ -231,20 +263,22 @@ export async function unarchiveBurnerWallet(
 }
 
 /**
- * Get the next account number for naming (Account 1, Account 2, etc.) for a network.
+ * Get the next account number for naming (Account 1, Account 2, etc.). EVM chains share numbering.
  */
 export async function getNextAccountNumber(
   network: NetworkType
 ): Promise<number> {
+  const canonical = evmCanonicalNetwork(network);
   const allData = await chrome.storage.local.get(null);
   const wallets: (BurnerWallet & { network?: NetworkType })[] = [];
 
   for (const [key, value] of Object.entries(allData)) {
     if (!key.startsWith("veil:burner:")) continue;
     const w = value as BurnerWallet & { network?: NetworkType };
-    const newFormat = key.match(/^veil:burner:(solana|ethereum):/);
-    const n: NetworkType = newFormat ? (newFormat[1] as NetworkType) : "solana";
-    if (n !== network) continue;
+    const newMatch = key.match(/^veil:burner:(solana|ethereum|avalanche|arbitrum):/);
+    const storedNet = newMatch ? (newMatch[1] as NetworkType) : "solana";
+    const n = evmCanonicalNetwork(storedNet);
+    if (n !== canonical) continue;
     wallets.push({ ...w, network: n });
   }
 

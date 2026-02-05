@@ -105,6 +105,13 @@ class BalanceMonitor {
                   toAddress: wallet.fullAddress,
                   walletIndex: wallet.index,
                   status: "confirmed",
+                  network: wallet.network,
+                  symbol:
+                    wallet.network === "avalanche"
+                      ? "AVAX"
+                      : wallet.network === "ethereum" || wallet.network === "arbitrum"
+                        ? "ETH"
+                        : "SOL",
                 };
                 await storeTransaction(transaction);
               }

@@ -64,13 +64,18 @@ export async function setActiveNetwork(network: NetworkType): Promise<void> {
   });
 }
 
+const EVM_NETWORKS: NetworkType[] = ["ethereum", "avalanche", "arbitrum"];
+function evmCanonical(network: NetworkType): NetworkType {
+  return EVM_NETWORKS.includes(network) ? "ethereum" : network;
+}
+
 /**
- * Get active burner wallet index for a network. Returns null if not set.
+ * Get active burner wallet index for a network. EVM chains share one active index.
  */
 export async function getActiveBurnerIndex(
   network: NetworkType
 ): Promise<number | null> {
-  const key = `${SETTINGS_KEYS.ACTIVE_BURNER_INDEX}:${network}`;
+  const key = `${SETTINGS_KEYS.ACTIVE_BURNER_INDEX}:${evmCanonical(network)}`;
   const result = await chrome.storage.local.get(key);
   const value = result[key];
   if (typeof value === "number" && Number.isInteger(value)) return value;
@@ -78,12 +83,12 @@ export async function getActiveBurnerIndex(
 }
 
 /**
- * Set active burner wallet index for a network
+ * Set active burner wallet index for a network. EVM chains share one active index.
  */
 export async function setActiveBurnerIndex(
   network: NetworkType,
   index: number
 ): Promise<void> {
-  const key = `${SETTINGS_KEYS.ACTIVE_BURNER_INDEX}:${network}`;
+  const key = `${SETTINGS_KEYS.ACTIVE_BURNER_INDEX}:${evmCanonical(network)}`;
   await chrome.storage.local.set({ [key]: index });
 }

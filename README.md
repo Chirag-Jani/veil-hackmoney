@@ -4,9 +4,11 @@
 
 Veil is a privacy-focused burner wallet browser extension built for fast, disposable onchain identities.
 
-It supports **two networks**:
-- **Ethereum (mainnet)**: create burner addresses, view balance, and transfer ETH.
-- **Solana**: create burner addresses, view balance, transfer SOL, and (optionally) use Veil “Privacy Cash” private transfer flows.
+It supports **four networks** (one active at a time):
+- **Ethereum (mainnet)**: burners, balance, transfer ETH, and **swap/bridge** via LI.FI.
+- **Avalanche (mainnet)**: burners, balance, transfer AVAX, and **swap/bridge** via LI.FI.
+- **Arbitrum (mainnet)**: burners, balance, transfer ETH, and **swap/bridge** via LI.FI.
+- **Solana**: burners, balance, transfer SOL, and (optionally) Veil “Privacy Cash” private transfer flows.
 
 ## What it does
 
@@ -16,15 +18,19 @@ It supports **two networks**:
   - Archive old burners to keep the wallet list clean.
 
 - **Network switching**
-  - Toggle between **Ethereum** and **Solana**.
+  - Toggle between **Ethereum**, **Avalanche**, **Arbitrum**, and **Solana**.
   - Each network maintains its own active burner and wallet list.
 
 - **Transfers**
-  - **Ethereum**: send **ETH** to any `0x…` address.
+  - **Ethereum / Arbitrum**: send **ETH** to any `0x…` address.
+  - **Avalanche**: send **AVAX** to any `0x…` address.
   - **Solana**: send **SOL** to any Solana address.
 
+- **Swap & bridge (EVM only)**
+  - **LI.FI-powered swap** across Ethereum, Avalanche, and Arbitrum (source/destination chain + token, quote, slippage, execute with Veil signer).
+
 - **Balance monitoring**
-  - Background balance monitoring updates burner balances for **SOL and ETH**.
+  - Background balance monitoring for **SOL, ETH, AVAX** (per network).
 
 - **dApp connection (Solana + Ethereum providers)**
   - Exposes a **Solana-compatible provider** via `window.veil` and coexists under `window.solana.providers` when other wallets are installed.
@@ -43,20 +49,23 @@ It supports **two networks**:
 ## Key management & export
 
 - Burners are derived from an encrypted seed stored by the extension.
-- **Export private key** is supported for both networks:
-  - **Ethereum**: exports a hex private key for the selected Ethereum burner.
+- **Export private key** is supported for all networks:
+  - **Ethereum / Avalanche / Arbitrum**: exports a hex private key for the selected EVM burner.
   - **Solana**: exports a Base58 secret key for the selected Solana burner (Phantom import format).
+
+## Asset prices
+
+- **ETH**, **AVAX**, and **SOL** USD prices are **fetched dynamically** from CoinGecko (on load and every 5 minutes). Fallback values are used only until the first successful fetch or if the request fails.
 
 ## Notes
 
-- Ethereum RPCs can be provided via extension env/config (with a built-in fallback RPC if none are set).
-- Solana and Ethereum wallet indices are tracked separately to avoid collisions across networks.
+- Ethereum, Avalanche, and Arbitrum RPCs are configured in `src/config/rpcs.ts` (with retry across multiple RPCs per chain).
+- Solana and EVM wallet indices are tracked separately per network to avoid collisions.
 
-## Todo — LI.FI (HackMoney track)
+## LI.FI (HackMoney track) — current status
 
-- [ ] **Swap + bridge**: Replace “Coming soon” Swap with LI.FI-powered flow; support ≥2 EVM chains (e.g. Ethereum + Base/Arbitrum).
-- [ ] **SwapModal / Swap UI**: Source/destination chain + token, amount; get LI.FI quote; show route, slippage, gas; execute with Veil EVM signer (`getEthereumWalletForIndex` + ethers).
-- [ ] **LI.FI Composer**: Use Composer for one multi-step flow (e.g. swap+bridge in one sign) to target “Best Use of LI.FI Composer in DeFi” ($2.5k).
-- [ ] **UX**: Slippage tolerance, error handling, gas checks (match “Best LI.FI-Powered DeFi Integration” requirements).
-- [ ] **(Optional)** “Deposit from anywhere”: LI.FI route (e.g. ETH on Ethereum → SOL on Solana) then existing “Deposit to Privacy” flow.
-- [ ] **Docs**: [LI.FI docs](https://docs.li.fi/), [End-to-end example](https://docs.li.fi/introduction/user-flows-and-examples/end-to-end-example), [API](https://docs.li.fi/api-reference/introduction), [SDK](https://docs.li.fi/sdk/overview).
+- [x] **Swap + bridge**: LI.FI-powered Swap modal; **3 EVM chains** (Ethereum, Avalanche, Arbitrum).
+- [x] **SwapModal**: Source/destination chain + token, amount; LI.FI quote; route summary, slippage (0.5 / 1 / 3%), gas estimate; execute with Veil EVM signer.
+- [x] **UX**: Slippage tolerance, error handling, balance/gas checks.
+- [ ] **LI.FI Composer** (optional): Multi-step composed routes for “Best Use of LI.FI Composer in DeFi” ($2.5k).
+- **Docs**: [LI.FI API](https://docs.li.fi/api-reference/introduction), [End-to-end example](https://docs.li.fi/introduction/user-flows-and-examples/end-to-end-example).

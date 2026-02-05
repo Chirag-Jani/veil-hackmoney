@@ -43,9 +43,20 @@ Detailed plan for integrating LI.FI into Veil to compete in the LI.FI track ($6k
 
 ## How it fits Veil
 
-- **Current state:** Multi-chain (Ethereum + Solana) burner wallet; **Swap is “Coming soon”** (ComingSoonModal).
-- **Gap:** No real swap or bridge; only native ETH/SOL transfers.
-- **LI.FI role:** Power **Swap** (and optionally **Bridge**) so users can swap on one EVM chain or move assets across EVM chains (and optionally to Solana). Composer can bundle multiple steps (e.g. swap + bridge) in one flow.
+- **Current state:** Multi-chain wallet (Ethereum, Avalanche, Arbitrum, Solana); **Swap is live** via LI.FI REST API (`/quote` + execute). Three EVM chains only; no Base. Native tokens: ETH (Ethereum, Arbitrum), AVAX (Avalanche).
+- **LI.FI role:** Powers **Swap** (and bridge) across Ethereum ↔ Avalanche ↔ Arbitrum. Single-step quotes; Composer not yet used.
+
+---
+
+## Prize eligibility (as of now)
+
+| Track | Prize | Eligible? | Notes |
+|-------|--------|-----------|--------|
+| **Best LI.FI-Powered DeFi Integration** | **$1,500** | **Yes** | Veil = wallet; LI.FI core API for cross-chain swaps/bridges; ≥1 external context (wallet); UX = slippage, errors, gas. |
+| **Best Use of LI.FI Composer in DeFi** | $2,500 | No | Requires Composer (multi-step composed routes). Current implementation uses single-step `/quote`. |
+| **Best AI x LI.FI Smart App** | $2,000 | No | Requires AI agent with strategy loop. |
+
+**You are currently eligible for: Best LI.FI-Powered DeFi Integration ($1,500).** To aim for the Composer prize ($2,500), add a flow using LI.FI Composer for a multi-step route (e.g. swap + bridge in one composed journey).
 
 ---
 

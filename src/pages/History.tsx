@@ -19,6 +19,7 @@ import {
   type TransactionType,
 } from "../utils/transactionHistory";
 import { formatAddress } from "../utils/storage";
+import type { NetworkType } from "../types";
 
 // Solana Logo SVG Component
 const SolanaLogo = ({ className }: { className?: string }) => (
@@ -84,6 +85,8 @@ const History = () => {
         return "Sent";
       case "incoming":
         return "Received";
+      case "swap":
+        return "Swap";
     }
   };
 
@@ -99,6 +102,8 @@ const History = () => {
         return <ArrowUpRight className="w-4 h-4 text-green-400" />;
       case "incoming":
         return <ArrowDown className="w-4 h-4 text-yellow-400" />;
+      case "swap":
+        return <ArrowUpRight className="w-4 h-4 text-emerald-400" />;
     }
   };
 
@@ -113,7 +118,36 @@ const History = () => {
       case "transfer":
         return "Transfer";
       case "incoming":
-        return "Incoming SOL";
+        return "Incoming";
+      case "swap":
+        return "Swap";
+    }
+  };
+
+  const getNetworkLabel = (network?: NetworkType): string => {
+    if (!network) return "Solana";
+    switch (network) {
+      case "ethereum":
+        return "Ethereum";
+      case "avalanche":
+        return "Avalanche";
+      case "arbitrum":
+        return "Arbitrum";
+      default:
+        return "Solana";
+    }
+  };
+
+  const getExplorerUrl = (signature: string, network?: NetworkType): string => {
+    switch (network) {
+      case "ethereum":
+        return `https://etherscan.io/tx/${signature}`;
+      case "avalanche":
+        return `https://snowtrace.io/tx/${signature}`;
+      case "arbitrum":
+        return `https://arbiscan.io/tx/${signature}`;
+      default:
+        return `https://solscan.io/tx/${signature}`;
     }
   };
 
@@ -154,8 +188,8 @@ const History = () => {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const openExplorer = (signature: string) => {
-    window.open(`https://solscan.io/tx/${signature}`, "_blank");
+  const openExplorer = (signature: string, network?: NetworkType) => {
+    window.open(getExplorerUrl(signature, network), "_blank");
   };
 
   return (
@@ -173,7 +207,7 @@ const History = () => {
 
       {/* Filters - More compact */}
       <div className="flex flex-wrap gap-1 mb-3">
-        {(["all", "deposit", "withdraw", "deposit_and_withdraw", "transfer", "incoming"] as const).map(
+        {(["all", "deposit", "withdraw", "deposit_and_withdraw", "transfer", "swap", "incoming"] as const).map(
           (filterType) => (
             <button
               key={filterType}
@@ -238,10 +272,10 @@ const History = () => {
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-[11px] font-semibold text-white">
-                      {tx.type === "withdraw" || tx.type === "transfer" || tx.type === "deposit_and_withdraw"
+                      {tx.type === "withdraw" || tx.type === "transfer" || tx.type === "deposit_and_withdraw" || tx.type === "swap"
                         ? "-"
                         : "+"}
-                      {formatTransactionAmount(tx.amount)} SOL
+                      {formatTransactionAmount(tx.amount)} {tx.symbol ?? "SOL"}
                     </div>
                   </div>
                 </div>
@@ -296,12 +330,12 @@ const History = () => {
                 {/* Amount - Large Display */}
                 <div className="text-center mb-6">
                   <div className="text-2xl font-bold text-white">
-                    {selectedTx.type === "withdraw" || selectedTx.type === "transfer" || selectedTx.type === "deposit_and_withdraw"
+                    {selectedTx.type === "withdraw" || selectedTx.type === "transfer" || selectedTx.type === "deposit_and_withdraw" || selectedTx.type === "swap"
                       ? "-"
                       : selectedTx.type === "incoming"
                       ? "+"
                       : ""}
-                    {formatTransactionAmount(selectedTx.amount)} SOL
+                    {formatTransactionAmount(selectedTx.amount)} {selectedTx.symbol ?? "SOL"}
                   </div>
                 </div>
 
@@ -380,14 +414,16 @@ const History = () => {
                   {/* Network */}
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-400">Network</span>
-                    <span className="text-xs text-white">Solana</span>
+                    <span className="text-xs text-white">
+                      {getNetworkLabel(selectedTx.network)}
+                    </span>
                   </div>
 
                   {/* Network Fee */}
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-400">Network Fee</span>
                     <span className="text-xs text-white">
-                      -&lt; {formatTransactionAmount(getNetworkFee(selectedTx))} SOL
+                      -&lt; {formatTransactionAmount(getNetworkFee(selectedTx))} {selectedTx.symbol ?? "SOL"}
                     </span>
                   </div>
                 </div>
@@ -420,16 +456,16 @@ const History = () => {
                   </div>
                 )}
 
-                {/* View on Solscan Link */}
+                {/* View on Explorer Link */}
                 {selectedTx.signature && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      openExplorer(selectedTx.signature!);
+                      openExplorer(selectedTx.signature!, selectedTx.network);
                     }}
                     className="w-full text-center text-sm text-purple-400 hover:text-purple-300 transition-colors py-2"
                   >
-                    View on Solscan
+                    View on {selectedTx.network === "ethereum" ? "Etherscan" : selectedTx.network === "avalanche" ? "Snowtrace" : selectedTx.network === "arbitrum" ? "Arbiscan" : "Solscan"}
                   </button>
                 )}
 
