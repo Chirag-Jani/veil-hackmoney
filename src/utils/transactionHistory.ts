@@ -166,3 +166,39 @@ export function formatTransactionDateDetailed(timestamp: number): string {
   
   return `${month} ${day}, ${year} at ${hours}:${minutesStr} ${ampm}`;
 }
+
+/**
+ * Format date for activity group header: "Feb 5, 2026" or "Dec 16" when same year.
+ */
+export function formatTransactionDateGroupHeader(timestamp: number): string {
+  const date = new Date(timestamp);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[date.getMonth()];
+  const day = date.getDate();
+  const year = date.getFullYear();
+  const currentYear = new Date().getFullYear();
+  if (year === currentYear) {
+    return `${month} ${day}`;
+  }
+  return `${month} ${day}, ${year}`;
+}
+
+/**
+ * Group transactions by calendar date (YYYY-MM-DD) for section headers.
+ */
+export function groupTransactionsByDate(transactions: Transaction[]): Array<{ dateKey: string; dateLabel: string; transactions: Transaction[] }> {
+  const groups = new Map<string, { dateLabel: string; transactions: Transaction[] }>();
+  for (const tx of transactions) {
+    const d = new Date(tx.timestamp);
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (!groups.has(dateKey)) {
+      groups.set(dateKey, { dateLabel: formatTransactionDateGroupHeader(tx.timestamp), transactions: [] });
+    }
+    groups.get(dateKey)!.transactions.push(tx);
+  }
+  return Array.from(groups.entries()).map(([dateKey, g]) => ({
+    dateKey,
+    dateLabel: g.dateLabel,
+    transactions: g.transactions,
+  }));
+}

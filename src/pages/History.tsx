@@ -1,10 +1,11 @@
 import {
-  ArrowDown,
+  ArrowDownLeft,
   ArrowLeft,
-  ArrowUp,
   ArrowUpRight,
   Check,
   Copy,
+  ChevronDown,
+  Link2,
   Shield,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -13,42 +14,41 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   getAllTransactions,
   formatTransactionAmount,
-  formatTransactionDate,
   formatTransactionDateDetailed,
+  groupTransactionsByDate,
   type Transaction,
   type TransactionType,
 } from "../utils/transactionHistory";
+import { getAlchemyPrices } from "../utils/alchemyPrices";
 import { formatAddress } from "../utils/storage";
+import { getTokenIconUrl } from "../utils/tokenIcons";
 import type { NetworkType } from "../types";
+
+const NETWORK_OPTIONS: { value: NetworkType | "all"; label: string; symbol: string }[] = [
+  { value: "all", label: "All networks", symbol: "ETH" },
+  { value: "ethereum", label: "Ethereum", symbol: "ETH" },
+  { value: "arbitrum", label: "Arbitrum", symbol: "ETH" },
+  { value: "avalanche", label: "Avalanche", symbol: "AVAX" },
+  { value: "solana", label: "Solana", symbol: "SOL" },
+];
 
 // Solana Logo SVG Component
 const SolanaLogo = ({ className }: { className?: string }) => (
-  <svg
-    viewBox="0 0 397.7 311.7"
-    className={className}
-    fill="currentColor"
-  >
-    <path
-      d="M64.6 237.9c2.4-2.4 5.7-3.8 9.2-3.8h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1l62.7-62.7z"
-      fill="#14F195"
-    />
-    <path
-      d="M64.6 3.8C67.1 1.4 70.4 0 73.8 0h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1L64.6 3.8z"
-      fill="#9945FF"
-    />
-    <path
-      d="M333.1 120.1c-2.4-2.4-5.7-3.8-9.2-3.8H6.5c-5.8 0-8.7 7-4.6 11.1l62.7 62.7c2.4 2.4 5.7 3.8 9.2 3.8h317.4c5.8 0 8.7-7 4.6-11.1l-62.7-62.7z"
-      fill="#00D4FF"
-    />
+  <svg viewBox="0 0 397.7 311.7" className={className} fill="currentColor">
+    <path d="M64.6 237.9c2.4-2.4 5.7-3.8 9.2-3.8h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1l62.7-62.7z" fill="#14F195" />
+    <path d="M64.6 3.8C67.1 1.4 70.4 0 73.8 0h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1L64.6 3.8z" fill="#9945FF" />
+    <path d="M333.1 120.1c-2.4-2.4-5.7-3.8-9.2-3.8H6.5c-5.8 0-8.7 7-4.6 11.1l62.7 62.7c2.4 2.4 5.7 3.8 9.2 3.8h317.4c5.8 0 8.7-7 4.6-11.1l-62.7-62.7z" fill="#00D4FF" />
   </svg>
 );
 
 const History = () => {
   const navigate = useNavigate();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [filter, setFilter] = useState<TransactionType | "all">("all");
+  const [networkFilter, setNetworkFilter] = useState<NetworkType | "all">("all");
+  const [showNetworkDropdown, setShowNetworkDropdown] = useState(false);
   const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [prices, setPrices] = useState<Record<string, number>>({});
 
   useEffect(() => {
     const loadTransactions = async () => {
@@ -59,7 +59,6 @@ const History = () => {
         console.error("[History] Error loading transactions:", error);
       }
     };
-
     const initialTimeout = setTimeout(loadTransactions, 0);
     const interval = setInterval(loadTransactions, 5000);
     return () => {
@@ -68,118 +67,118 @@ const History = () => {
     };
   }, []);
 
-  const filteredTransactions =
-    filter === "all"
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const p = await getAlchemyPrices(["SOL", "ETH", "AVAX"]);
+        if (!cancelled) {
+          setPrices((prev) => ({ ...prev, ...p, USDC: 1, USDT: 1 }));
+        }
+      } catch {
+        if (!cancelled) setPrices((prev) => ({ ...prev, USDC: 1, USDT: 1 }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const filteredByNetwork =
+    networkFilter === "all"
       ? transactions
-      : transactions.filter((tx) => tx.type === filter);
+      : transactions.filter((tx) => (tx.network ?? "solana") === networkFilter);
+  const dateGroups = groupTransactionsByDate(filteredByNetwork);
+
+  const getActivityRowLabel = (tx: Transaction): string => {
+    if (tx.type === "transfer") return tx.symbol ? `Sent ${tx.symbol}` : "Sent";
+    if (tx.type === "incoming") return "Received";
+    return "Contract interaction";
+  };
+
+  const getActivityIcon = (type: TransactionType) => {
+    if (type === "transfer" || type === "withdraw" || type === "deposit_and_withdraw" || type === "swap") {
+      return <ArrowUpRight className="w-4 h-4 text-white" strokeWidth={2} />;
+    }
+    if (type === "incoming") {
+      return <ArrowDownLeft className="w-4 h-4 text-white" strokeWidth={2} />;
+    }
+    return <Link2 className="w-4 h-4 text-white" strokeWidth={2} />;
+  };
+
+  const isOutgoing = (tx: Transaction) =>
+    tx.type === "withdraw" || tx.type === "transfer" || tx.type === "deposit_and_withdraw" || tx.type === "swap";
+
+  const getFiatUsd = (tx: Transaction): number | null => {
+    const symbol = (tx.symbol ?? "SOL").toUpperCase();
+    const price = prices[symbol] ?? prices[symbol.toLowerCase()];
+    if (price == null) return null;
+    return tx.amount * price;
+  };
 
   const getTransactionTypeLabel = (type: TransactionType): string => {
     switch (type) {
-      case "deposit":
-        return "Deposit";
-      case "withdraw":
-        return "Withdraw";
-      case "deposit_and_withdraw":
-        return "Send Privately";
-      case "transfer":
-        return "Sent";
-      case "incoming":
-        return "Received";
-      case "swap":
-        return "Swap";
+      case "deposit": return "Deposit";
+      case "withdraw": return "Withdraw";
+      case "deposit_and_withdraw": return "Send Privately";
+      case "transfer": return "Sent";
+      case "incoming": return "Received";
+      case "swap": return "Swap";
     }
   };
 
   const getTransactionIcon = (type: TransactionType) => {
     switch (type) {
       case "deposit":
-        return <Shield className="w-4 h-4 text-purple-400" />;
-      case "withdraw":
-        return <ArrowUp className="w-4 h-4 text-blue-400" />;
       case "deposit_and_withdraw":
         return <Shield className="w-4 h-4 text-purple-400" />;
+      case "withdraw":
+        return <ArrowUpRight className="w-4 h-4 text-blue-400" />;
       case "transfer":
         return <ArrowUpRight className="w-4 h-4 text-green-400" />;
       case "incoming":
-        return <ArrowDown className="w-4 h-4 text-yellow-400" />;
+        return <ArrowDownLeft className="w-4 h-4 text-yellow-400" />;
       case "swap":
         return <ArrowUpRight className="w-4 h-4 text-emerald-400" />;
-    }
-  };
-
-  const getTransactionLabel = (type: TransactionType) => {
-    switch (type) {
-      case "deposit":
-        return "Deposit to Privacy";
-      case "withdraw":
-        return "Withdraw from Privacy";
-      case "deposit_and_withdraw":
-        return "Send Privately";
-      case "transfer":
-        return "Transfer";
-      case "incoming":
-        return "Incoming";
-      case "swap":
-        return "Swap";
     }
   };
 
   const getNetworkLabel = (network?: NetworkType): string => {
     if (!network) return "Solana";
     switch (network) {
-      case "ethereum":
-        return "Ethereum";
-      case "avalanche":
-        return "Avalanche";
-      case "arbitrum":
-        return "Arbitrum";
-      default:
-        return "Solana";
+      case "ethereum": return "Ethereum";
+      case "avalanche": return "Avalanche";
+      case "arbitrum": return "Arbitrum";
+      default: return "Solana";
     }
   };
 
   const getExplorerUrl = (signature: string, network?: NetworkType): string => {
     switch (network) {
-      case "ethereum":
-        return `https://etherscan.io/tx/${signature}`;
-      case "avalanche":
-        return `https://snowtrace.io/tx/${signature}`;
-      case "arbitrum":
-        return `https://arbiscan.io/tx/${signature}`;
-      default:
-        return `https://solscan.io/tx/${signature}`;
+      case "ethereum": return `https://etherscan.io/tx/${signature}`;
+      case "avalanche": return `https://snowtrace.io/tx/${signature}`;
+      case "arbitrum": return `https://arbiscan.io/tx/${signature}`;
+      default: return `https://solscan.io/tx/${signature}`;
     }
   };
 
   const getStatusLabel = (status: Transaction["status"]): string => {
     switch (status) {
-      case "confirmed":
-        return "Succeeded";
-      case "pending":
-        return "Pending";
-      case "failed":
-        return "Failed";
+      case "confirmed": return "Confirmed";
+      case "pending": return "Pending";
+      case "failed": return "Failed";
     }
   };
 
   const getStatusColor = (status: Transaction["status"]) => {
     switch (status) {
-      case "confirmed":
-        return "text-green-400";
-      case "pending":
-        return "text-yellow-400";
-      case "failed":
-        return "text-red-400";
+      case "confirmed": return "text-green-400";
+      case "pending": return "text-yellow-400";
+      case "failed": return "text-red-400";
     }
   };
 
   const getNetworkFee = (tx: Transaction): number => {
-    // Estimate network fee (typically ~5000 lamports = 0.000005 SOL)
-    // For privacy cash transactions, fees might be higher
-    if (tx.type === "deposit" || tx.type === "withdraw" || tx.type === "deposit_and_withdraw") {
-      return 0.00001; // Privacy cash operations have higher fees
-    }
-    return 0.000005; // Standard transfer fee
+    if (tx.type === "deposit" || tx.type === "withdraw" || tx.type === "deposit_and_withdraw") return 0.00001;
+    return 0.000005;
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -192,10 +191,14 @@ const History = () => {
     window.open(getExplorerUrl(signature, network), "_blank");
   };
 
+  const currentNetworkOption = NETWORK_OPTIONS.find((o) => o.value === networkFilter) ?? NETWORK_OPTIONS[1];
+  const chainSymbol = networkFilter === "all" ? "ETH" : currentNetworkOption.symbol;
+  const chainIconUrl = getTokenIconUrl(chainSymbol);
+
   return (
-    <div className="h-full w-full bg-black text-white p-2.5 relative flex flex-col font-sans">
+    <div className="h-full w-full bg-[#0d0d0d] text-white flex flex-col font-sans">
       {/* Header */}
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-2 p-2.5 pb-2 shrink-0">
         <button
           onClick={() => navigate(-1)}
           className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"
@@ -205,81 +208,129 @@ const History = () => {
         <h1 className="text-base font-bold">Activity</h1>
       </div>
 
-      {/* Filters - More compact */}
-      <div className="flex flex-wrap gap-1 mb-3">
-        {(["all", "deposit", "withdraw", "deposit_and_withdraw", "transfer", "swap", "incoming"] as const).map(
-          (filterType) => (
-            <button
-              key={filterType}
-              onClick={() => setFilter(filterType)}
-              className={`px-2 py-0.5 rounded-md text-[10px] font-medium transition-colors ${
-                filter === filterType
-                  ? "bg-white/10 text-white"
-                  : "bg-white/5 text-gray-400 hover:bg-white/10"
-              }`}
-            >
-              {filterType === "all"
-                ? "All"
-                : filterType.charAt(0).toUpperCase() + filterType.slice(1)}
-            </button>
-          )
-        )}
+      {/* Network selector */}
+      <div className="px-2.5 pb-3 shrink-0 relative">
+        <button
+          type="button"
+          onClick={() => setShowNetworkDropdown((v) => !v)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+        >
+          {chainIconUrl ? (
+            <img src={chainIconUrl} alt="" className="w-4 h-4 rounded-full object-contain" />
+          ) : (
+            <span className="w-4 h-4 rounded-full bg-blue-500/80 flex items-center justify-center text-[10px] font-bold">E</span>
+          )}
+          <span className="text-sm font-medium text-white">{currentNetworkOption.label}</span>
+          <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${showNetworkDropdown ? "rotate-180" : ""}`} />
+        </button>
+
+        <AnimatePresence>
+          {showNetworkDropdown && (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowNetworkDropdown(false)}
+                className="fixed inset-0 z-40"
+                aria-hidden="true"
+              />
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.15 }}
+                className="absolute left-2.5 right-2.5 top-full mt-1 rounded-xl bg-gray-900 border border-white/10 shadow-xl z-50 overflow-hidden"
+              >
+                {NETWORK_OPTIONS.map((opt) => {
+                  const iconUrl = getTokenIconUrl(opt.symbol);
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setNetworkFilter(opt.value);
+                        setShowNetworkDropdown(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${networkFilter === opt.value ? "bg-white/10 text-white" : "text-gray-300 hover:bg-white/5"}`}
+                    >
+                      {iconUrl ? (
+                        <img src={iconUrl} alt="" className="w-5 h-5 rounded-full object-contain shrink-0" />
+                      ) : (
+                        <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-[10px] font-bold shrink-0">{opt.symbol[0]}</span>
+                      )}
+                      <span className="text-sm font-medium">{opt.label}</span>
+                      {networkFilter === opt.value && <Check className="w-4 h-4 text-green-400 ml-auto shrink-0" />}
+                    </button>
+                  );
+                })}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Transactions List - More compact */}
-      <div className="flex-1 overflow-y-auto">
-        {filteredTransactions.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center">
+      {/* Activity list grouped by date */}
+      <div className="flex-1 overflow-y-auto min-h-0 px-2.5">
+        {filteredByNetwork.length === 0 ? (
+          <div className="flex items-center justify-center py-12">
             <div className="text-center">
-              <p className="text-gray-400 text-sm mb-2">No transactions yet</p>
-              <p className="text-gray-600 text-xs">
-                Your transaction history will appear here
-              </p>
+              <p className="text-gray-400 text-sm">No activity yet</p>
+              <p className="text-gray-500 text-xs mt-1">Transactions will appear here</p>
             </div>
           </div>
         ) : (
-          <div className="space-y-1">
-            {filteredTransactions.map((tx) => (
-              <motion.div
-                key={tx.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                onClick={() => setSelectedTx(tx)}
-                className="p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 cursor-pointer transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <div className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center shrink-0">
-                      {getTransactionIcon(tx.type)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <span className="text-[11px] font-medium text-white">
-                          {getTransactionLabel(tx.type)}
-                        </span>
-                        <span
-                          className={`text-[9px] font-medium ${getStatusColor(
-                            tx.status
-                          )}`}
-                        >
-                          {tx.status}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-gray-400">
-                        {formatTransactionDate(tx.timestamp)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-[11px] font-semibold text-white">
-                      {tx.type === "withdraw" || tx.type === "transfer" || tx.type === "deposit_and_withdraw" || tx.type === "swap"
-                        ? "-"
-                        : "+"}
-                      {formatTransactionAmount(tx.amount)} {tx.symbol ?? "SOL"}
-                    </div>
-                  </div>
+          <div className="space-y-4 pb-4">
+            {dateGroups.map((group) => (
+              <div key={group.dateKey}>
+                <h2 className="text-xs font-medium text-gray-400 mb-2 sticky top-0 bg-[#0d0d0d] py-0.5">
+                  {group.dateLabel}
+                </h2>
+                <div className="space-y-0.5">
+                  {group.transactions.map((tx) => {
+                    const outgoing = isOutgoing(tx);
+                    const fiat = getFiatUsd(tx);
+                    const chainIcon = getTokenIconUrl((tx.network === "avalanche" ? "AVAX" : tx.network === "ethereum" || tx.network === "arbitrum" ? "ETH" : "SOL"));
+                    return (
+                      <motion.button
+                        key={tx.id}
+                        type="button"
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        onClick={() => setSelectedTx(tx)}
+                        className="w-full flex items-center gap-3 py-2.5 px-2 rounded-lg hover:bg-white/5 transition-colors text-left"
+                      >
+                        <div className="relative w-10 h-10 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                          {getActivityIcon(tx.type)}
+                          {chainIcon && (
+                            <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-[#0d0d0d] border border-white/20 flex items-center justify-center overflow-hidden">
+                              <img src={chainIcon} alt="" className="w-2.5 h-2.5 object-contain" />
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-white truncate">
+                            {getActivityRowLabel(tx)}
+                          </div>
+                          <div className={`text-xs font-medium ${getStatusColor(tx.status)}`}>
+                            {getStatusLabel(tx.status)}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={`text-sm font-semibold ${outgoing ? "text-white" : "text-white"}`}>
+                            {outgoing ? "-" : ""}{formatTransactionAmount(tx.amount)} {tx.symbol ?? "SOL"}
+                          </div>
+                          {fiat != null && (
+                            <div className="text-xs text-gray-500">
+                              {outgoing ? "-" : ""}${fiat >= 1000 ? fiat.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : fiat.toFixed(2)}
+                            </div>
+                          )}
+                        </div>
+                      </motion.button>
+                    );
+                  })}
                 </div>
-              </motion.div>
+              </div>
             ))}
           </div>
         )}
